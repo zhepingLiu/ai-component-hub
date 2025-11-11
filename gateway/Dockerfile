@@ -6,6 +6,7 @@ COPY app ./app
 COPY routes.yaml ./routes.yaml
 COPY gunicorn.conf.py ./gunicorn.conf.py
 ENV PYTHONUNBUFFERED=1
+VOLUME ["/app"]
 EXPOSE 8000
 
 CMD ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "--config", "./gunicorn.conf.py"]

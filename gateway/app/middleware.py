@@ -2,6 +2,7 @@ import time, uuid, logging
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from .config import settings
+from .db import SessionLocal, Log
 
 logger = logging.getLogger("gateway")
 
@@ -20,11 +21,32 @@ class TraceLogMiddleware(BaseHTTPMiddleware):
                 "ms": duration
             })
             response.headers["X-Trace-Id"] = trace_id
-            return response
+    
         except Exception as e:
             duration = round((time.time() - start)*1000, 2)
             logger.exception({"trace_id": trace_id, "err": str(e), "ms": duration})
             raise
+        
+        try:
+            db = SessionLocal()
+            log = Log(
+                trace_id=trace_id,
+                path=request.url.path,
+                method=request.method,
+                status=response.status_code,
+                ms=int(duration),
+                detail={
+                    "client": request.client.host if request.client else None,
+                    "headers": dict(request.headers),
+                },
+            )
+            db.add(log)
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.warning(f"DB log insert failed: {e}")
+            
+        return response
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):

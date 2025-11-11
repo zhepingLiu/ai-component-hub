@@ -5,4 +5,5 @@ prometheus-fastapi-instrumentator==6.1.0
 pydantic-settings==2.5.2
 PyYAML==6.0.2
 slowapi==0.1.9
+SQLAlchemy==2.0.31
 uvicorn[standard]==0.30.6

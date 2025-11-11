@@ -1,9 +1,11 @@
 import json, httpx, logging, yaml
 
 from .config import settings
+from .db import init_db
 from .middleware import TraceLogMiddleware, ApiKeyMiddleware
 from .schemas import StdResp
 from .routing import RouteTable
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
@@ -20,8 +22,16 @@ limiter = Limiter(key_func=get_remote_address)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("gateway")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    print("[gateway] SQLite DB initialized.")
+    yield
+    print("[gateway] shutting down...") 
+
+
 # ---------------- App ----------------
-app = FastAPI(title="AI Component Gateway", version="0.1.0")
+app = FastAPI(title="AI Component Gateway", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(TraceLogMiddleware)
 app.add_middleware(ApiKeyMiddleware)
