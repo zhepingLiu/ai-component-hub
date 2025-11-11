@@ -1,0 +1,3 @@
+# Examples of components routes
+tools.echo: "http://tools-basic:7001/echo"
+tools.add: "http://tools-basic:7001/add"

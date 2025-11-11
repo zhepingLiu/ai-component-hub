@@ -1,0 +1,29 @@
+services:
+  nginx:
+    build: ./nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway
+    networks:
+      - ai-net
+
+  gateway:
+    build: ./gateway
+    environment:
+      - GW_API_KEY=prod-key-123
+    depends_on:
+      - tools-basic
+    networks:
+      - ai-net
+
+  tools-basic:
+    build: ./components/tools-basic
+    environment:
+      - GW_API_KEY=prod-key-123
+    networks:
+      - ai-net
+
+networks:
+  ai-net:
+    name: ai-component-net
