@@ -6,7 +6,7 @@ import datetime
 import os
 
 # SQLite 文件路径，可在 docker-compose 里映射到宿主机
-DB_PATH = os.getenv("DB_PATH", "/app/gateway.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data/gateway.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 # 创建 engine / session / base

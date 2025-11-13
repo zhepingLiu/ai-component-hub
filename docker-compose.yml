@@ -17,7 +17,7 @@ services:
     networks:
       - ai-net
     volumes:
-      - ./gateway_data:/app
+      - ./gateway_data:/app/data
 
   tools-basic:
     build: ./components/tools-basic
