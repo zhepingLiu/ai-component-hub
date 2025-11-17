@@ -1,3 +1,5 @@
 # Examples of components routes
 tools.echo: "http://tools-basic:7001/echo"
 tools.add: "http://tools-basic:7001/add"
+tools.esb-download: "http://esb:7002/esb-download"
+tools.esb-upload: "http://esb:7002/esb-upload"

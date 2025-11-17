@@ -10,6 +10,8 @@ services:
 
   gateway:
     build: ./gateway
+    ports:
+      - "8000:8000"
     environment:
       - GW_API_KEY=prod-key-123
     depends_on:
@@ -19,6 +21,17 @@ services:
 
   tools-basic:
     build: ./components/tools-basic
+    ports:
+      - "7001:7001"
+    environment:
+      - GW_API_KEY=prod-key-123
+    networks:
+      - ai-net
+
+  esb:
+    build: ./components/esb
+    ports:
+      - "7002:7002"
     environment:
       - GW_API_KEY=prod-key-123
     networks:
