@@ -36,6 +36,8 @@ services:
       - GW_API_KEY=prod-key-123
     networks:
       - ai-net
+    volumes:
+    - ./data:/app/data
 
 networks:
   ai-net:
