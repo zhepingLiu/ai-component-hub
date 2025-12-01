@@ -3,7 +3,9 @@ import json, httpx, logging, yaml
 from .config import settings
 from .middleware import TraceLogMiddleware, ApiKeyMiddleware
 from .schemas import StdResp
-from .routing import RouteTable
+from .schemas import RouteEntry
+# from .routing import RouteTable
+from .route_table import RouteTable
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
@@ -32,7 +34,8 @@ if settings.ENABLE_METRICS:
     Instrumentator().instrument(app).expose(app)
 
 # ---------------- Load routes ----------------
-routes = RouteTable(settings.ROUTE_FILE)
+# routes = RouteTable(settings.ROUTE_FILE)
+routes = RouteTable()
 
 # ---------------- Limit ----------------
 @app.exception_handler(RateLimitExceeded)
@@ -49,32 +52,10 @@ def reload_routes():
     return StdResp(code=0, message="routes reloaded").model_dump()
 
 @app.post("/register")
-async def register_component(request: Request):
-    """
-    组件启动时自动调用:
-    POST /register
-    body: {"category": "tools", "action": "echo", "url": "http://tools-basic:7001/echo"}
-    """
-    payload = await request.json()
-    category = payload.get("category")
-    action = payload.get("action")
-    url = payload.get("url")
-
-    if not all([category, action, url]):
-        raise HTTPException(status_code=400, detail="missing_fields")
-
-    routes[f"{category}.{action}"] = url
-    
-    print(routes)
-
-    # 更新文件（可选：同步写回 routes.yaml）
-    try:
-        with open(settings.ROUTE_FILE, "w") as f:
-            yaml.safe_dump(routes._routes, f)
-    except Exception as e:
-        logger.warning(f"Failed to update route file: {e}")
-
-    return StdResp(code=0, message="component_registered", data={"route": f"{category}.{action}"}).model_dump()
+def register(ep: RouteEntry):
+    key = f"{ep.category}.{ep.action}"
+    routes.add(key, ep.url)
+    return {"code": 0, "msg": "ok"}
 
 @limiter.limit("60/minute")
 @app.api_route(f"{settings.API_PREFIX}" + "/{category}/{action}", methods=["GET","POST"])

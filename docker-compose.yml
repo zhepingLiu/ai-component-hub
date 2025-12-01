@@ -1,4 +1,13 @@
 services:
+
+  redis:
+    image: redis:7 # 改成我们行里的Credis
+    container_name: ai-component-hub-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ai-net
+
   nginx:
     build: ./nginx
     ports:
