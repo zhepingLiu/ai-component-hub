@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM repo.pub.cqrcb.com:18083/cqrcb-docker-group/base/kylin-python-arm64:v3.11.14
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -i https://pypi.org/simple -r requirements.txt

@@ -1,5 +1,4 @@
 services:
-
   redis:
     image: redis:7 # 改成我们行里的Credis
     container_name: ai-component-hub-redis
@@ -21,8 +20,6 @@ services:
     build: ./gateway
     ports:
       - "8000:8000"
-    environment:
-      - GW_API_KEY=prod-key-123
     depends_on:
       - tools-basic
     networks:
@@ -32,8 +29,6 @@ services:
     build: ./components/tools-basic
     ports:
       - "7001:7001"
-    environment:
-      - GW_API_KEY=prod-key-123
     networks:
       - ai-net
 
@@ -41,12 +36,10 @@ services:
     build: ./components/esb
     ports:
       - "7002:7002"
-    environment:
-      - GW_API_KEY=prod-key-123
     networks:
       - ai-net
     volumes:
-    - ./data:/app/data
+      - ./data:/app/data
 
 networks:
   ai-net:
