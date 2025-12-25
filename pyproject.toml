@@ -1,0 +1,28 @@
+[project]
+name = "ai-component-hub"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+dependencies = []
+
+[dependency-groups]
+common = [
+  "fastapi==0.115.2",
+  "httpx==0.27.2",
+  "uvicorn[standard]==0.30.6",
+]
+
+tools_basic = []
+
+esb = [
+  "pydantic==2.9.2",
+]
+
+gateway = [
+  "gunicorn==23.0.0",
+  "prometheus-fastapi-instrumentator==6.1.0",
+  "pydantic-settings==2.5.2",
+  "PyYAML==6.0.2",
+  "slowapi==0.1.9",
+  "redis",
+]
