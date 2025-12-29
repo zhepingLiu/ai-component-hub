@@ -1,27 +1,15 @@
 from __future__ import annotations
 
-import json
-import uuid
-
 from fastapi import APIRouter, HTTPException, Request
 
 from ..config import settings
 from ..services.file_stage import download_to_staging
 from ..services.agent_client import AgentClient
+from ..services.job_tracker import JobTracker
 from ..schemas.document_ocr_schemas import DocOCRReq, DocOCRResp
 
 
 router = APIRouter()
-
-# --------- Redis key helpers ---------
-
-def _k(*parts: str) -> str:
-    # e.g. aihub:orchestrator:job:<request_id>
-    return f"{settings.REDIS_KEY_PREFIX}:" + ":".join(parts)
-
-
-JOB_KEY = "job"          # job:<rid>  -> hash/json
-LOCK_KEY = "lock"        # lock:<rid> -> string token
 
 
 @router.post("/doc-ocr/run", response_model=DocOCRResp)
@@ -33,37 +21,30 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
     - 下载文件到外部 volume staging（流式）
     - 调用智能体平台（先 stub）
     """
-    r = request.app.state.redis
+    r = request.app.state.redis  # type: ignore[attr-defined]
+    tracker = JobTracker(r)
 
-    request_id = req.request_id or str(uuid.uuid4())
-    job_key = _k(JOB_KEY, request_id)
-    lock_key = _k(LOCK_KEY, request_id)
+    request_id = tracker.ensure_request_id(req.request_id)
 
     # 1) 幂等：如果已经有结果/状态，直接返回
-    existing = r.get(job_key)
+    _, existing = tracker.get_job(request_id)
     if existing:
-        payload = json.loads(existing)
         return DocOCRResp(
             request_id=request_id,
-            status=payload.get("status", "UNKNOWN"),
-            result=payload.get("result"),
-            error=payload.get("error"),
+            status=existing.get("status", "UNKNOWN"),
+            result=existing.get("result"),
+            error=existing.get("error"),
         )
 
     # 2) 分布式锁：避免同一 request_id 并发重复执行
-    token = str(uuid.uuid4())
-    got_lock = r.set(lock_key, token, nx=True, ex=settings.IDEMPOTENCY_TTL_SEC)
-    if not got_lock:
+    token, _ = tracker.acquire_lock(request_id, ttl=settings.IDEMPOTENCY_TTL_SEC)
+    if not token:
         # 有另一个实例在跑；返回 RUNNING（调用方可重试）
         return DocOCRResp(request_id=request_id, status="RUNNING")
 
     try:
         # 3) 写入 RUNNING 状态（带 TTL）
-        r.set(
-            job_key,
-            json.dumps({"status": "RUNNING", "result": None, "error": None}),
-            ex=settings.JOB_TTL_SEC,
-        )
+        tracker.set_status(request_id, status="RUNNING", result=None, error=None, ttl=settings.JOB_TTL_SEC)
 
         # 4) 下载文件到 staging（外部卷路径）
         filename = req.file.filename or "input.bin"
@@ -80,10 +61,12 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
         agent_res = await client.run_doc_ocr(local_file_path=staged.local_path, options=req.options)
 
         if not agent_res.ok:
-            r.set(
-                job_key,
-                json.dumps({"status": "FAILED", "result": None, "error": agent_res.error}),
-                ex=settings.JOB_TTL_SEC,
+            tracker.set_status(
+                request_id,
+                status="FAILED",
+                result=None,
+                error=agent_res.error,
+                ttl=settings.JOB_TTL_SEC,
             )
             raise HTTPException(status_code=502, detail=agent_res.error or "agent upstream error")
 
@@ -97,15 +80,10 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
             },
             "agent": agent_res.data,
         }
-        r.set(job_key, json.dumps({"status": "SUCCEEDED", "result": result, "error": None}), ex=settings.JOB_TTL_SEC)
+        tracker.set_status(request_id, status="SUCCEEDED", result=result, error=None, ttl=settings.JOB_TTL_SEC)
 
         return DocOCRResp(request_id=request_id, status="SUCCEEDED", result=result)
 
     finally:
         # 7) 解锁
-        try:
-            cur = r.get(lock_key)
-            if cur == token:
-                r.delete(lock_key)
-        except Exception:
-            pass
+        tracker.release_lock(request_id, token)
