@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from ..config import settings
 from ..services.file_stage import download_to_staging
 from ..services.agent_client import AgentClient
-from ..schemas.document_ocr import DocOCRReq, DocOCRResp
+from ..schemas.document_ocr_schemas import DocOCRReq, DocOCRResp
 
 
 router = APIRouter()
@@ -102,7 +102,7 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
         return DocOCRResp(request_id=request_id, status="SUCCEEDED", result=result)
 
     finally:
-        # 7) 解锁（最佳努力）
+        # 7) 解锁
         try:
             cur = r.get(lock_key)
             if cur == token:

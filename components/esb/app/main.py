@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from app.schemas import UploadReq, DownloadReq
 import httpx
 import os
+from typing import AsyncIterator, Optional
 
 app = FastAPI()
 
@@ -21,33 +22,42 @@ async def esb_download(req: DownloadReq):
     server_file = req.server_file
     local_file_path = req.local_file_path
 
-    if not server_path or not server_file or not local_file_path:
+    if not server_path or not server_file:
         print("参数不能为空")
-        return JSONResponse(content=False)
+        return JSONResponse(content=False, status_code=400)
 
     # 拼接 URL
     server_path = server_path.rstrip("/")
     server_file = server_file.lstrip("/")
     url = f"{server_path}/{server_file}"
 
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            content = resp.content  # 保持你原来的简单逻辑
-    except Exception as e:
-        print("下载失败:", e)
-        return JSONResponse(content=False)
+    async def _stream() -> AsyncIterator[bytes]:
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                async with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_bytes():
+                        if chunk:
+                            yield chunk
+        except Exception as e:
+            print("下载失败:", e)
+            # 触发 FastAPI 重新抛出异常，返回 502
+            raise
 
-    # 写入 Docker 本地
-    try:
-        with open(local_file_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        print("写入本地文件失败:", e)
-        return JSONResponse(content=False)
+    # 如果带 local_file_path，就直接写到容器文件系统；否则以流方式返回
+    if local_file_path:
+        try:
+            os.makedirs(os.path.dirname(local_file_path) or ".", exist_ok=True)
+            with open(local_file_path, "wb") as f:
+                async for chunk in _stream():
+                    f.write(chunk)
+        except Exception as e:
+            print("写入本地文件失败:", e)
+            return JSONResponse(content=False)
 
-    return JSONResponse(content=True)
+        return JSONResponse(content=True)
+
+    return StreamingResponse(_stream(), media_type="application/octet-stream")
 
 
 # ----------------------------------------------------

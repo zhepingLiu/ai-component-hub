@@ -8,5 +8,5 @@ class UploadReq(BaseModel):
 class DownloadReq(BaseModel):
     server_path: str
     server_file: str
-    local_file_path: str
+    local_file_path: str | None = None
     

@@ -22,5 +22,8 @@ class Settings(BaseSettings):
     # staging 目录（必须挂载外部卷）
     STAGING_DIR: str = os.getenv("STAGING_DIR", "/app/data/staging")
 
+    # ESB service base URL（同 docker-compose 内服务名）
+    ESB_BASE_URL: str = os.getenv("ESB_BASE_URL", "http://esb:7002")
+
 
 settings = Settings()
