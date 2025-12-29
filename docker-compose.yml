@@ -19,6 +19,11 @@ services:
       - ai-net
     volumes:
       - ./data/gateway:/app/data
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_KEY_PREFIX=aihub:gateway
 
   redis:
     image: redis:7 # 改成我们行里的Credis
@@ -44,6 +49,20 @@ services:
       - ai-net
     volumes:
       - ./data/esb:/app/data
+
+  orchestrator:
+    build: ./orchestrator
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_KEY_PREFIX=aihub:orchestrator
+      - STAGING_DIR=/app/data/staging
+    volumes:
+      - ./data/orchestrator:/app/data
+    networks:
+      - ai-net
+    depends_on:
+      - redis
 
 networks:
   ai-net:

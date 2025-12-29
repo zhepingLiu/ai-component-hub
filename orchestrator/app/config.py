@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
+
+    # Redis
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "redis")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD: str | None = os.getenv("REDIS_PASSWORD") or None
+
+    # Namespace（避免不同系统/环境 key 冲突）
+    REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "aihub:orchestrator")
+
+    # 任务/幂等相关默认 TTL（秒）
+    IDEMPOTENCY_TTL_SEC: int = int(os.getenv("IDEMPOTENCY_TTL_SEC", "3600"))  # 1h
+    JOB_TTL_SEC: int = int(os.getenv("JOB_TTL_SEC", "86400"))  # 24h
+
+    # staging 目录（必须挂载外部卷）
+    STAGING_DIR: str = os.getenv("STAGING_DIR", "/app/data/staging")
+
+
+settings = Settings()

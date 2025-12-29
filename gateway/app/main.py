@@ -35,7 +35,7 @@ if settings.ENABLE_METRICS:
 
 # ---------------- Load routes ----------------
 # routes = RouteTable(settings.ROUTE_FILE)
-routes = RouteTable()
+routes = RouteTable(settings=settings)
 
 # ---------------- Limit ----------------
 @app.exception_handler(RateLimitExceeded)
