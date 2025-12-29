@@ -61,6 +61,8 @@ services:
       - ./data/orchestrator:/app/data
     networks:
       - ai-net
+    ports:
+      - "7010:7010"
     depends_on:
       - redis
 

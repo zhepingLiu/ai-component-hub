@@ -1,3 +1,3 @@
-FROM repo.pub.cqrcb.com:18083/cqrcb-docker-group/base/kylin-nginx-arm64:v1.28.0
+FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/nginx.conf
 EXPOSE 80
