@@ -26,3 +26,7 @@ gateway = [
   "slowapi==0.1.9",
   "redis",
 ]
+
+orchestrator = [
+  "pydantic==2.9.2",
+]
