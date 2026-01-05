@@ -1,1 +1,4 @@
 tests/*
+data/
+.venv/
+uv.lock
