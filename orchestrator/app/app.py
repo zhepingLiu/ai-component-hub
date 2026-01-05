@@ -10,6 +10,7 @@ from .logging_utils import setup_logging
 from .config import settings
 
 from .routers.document_ocr import router as doc_ocr_router
+from .routers.agent_gateway import router as agent_gateway_router
 
 setup_logging(
     service_name="orchestrator",
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router, tags=["health"])
+    app.include_router(agent_gateway_router, tags=["agents"])
 
     return app
 

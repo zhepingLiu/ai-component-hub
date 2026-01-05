@@ -30,5 +30,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "10"))
 
+    # Agent proxy
+    REQUEST_TIMEOUT_SEC: float = float(os.getenv("REQUEST_TIMEOUT_SEC", "15.0"))
+
 
 settings = Settings()
