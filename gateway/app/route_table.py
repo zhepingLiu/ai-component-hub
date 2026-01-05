@@ -1,10 +1,20 @@
 import redis
-import json
+
+from .config import Settings, settings as app_settings
+
 
 class RouteTable:
-    def __init__(self):
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or app_settings
+        self.redis_key = f"{self.settings.REDIS_KEY_PREFIX}:routes"
         # decode_responses=True 让读到的是 str 而不是 bytes
-        self.r = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
+        self.r = redis.Redis(
+            host=self.settings.REDIS_HOST,
+            port=self.settings.REDIS_PORT,
+            db=self.settings.REDIS_DB,
+            password=self.settings.REDIS_PASSWORD,
+            decode_responses=True,
+        )
         self._routes = {}
         self.reload()   # 启动时加载一次
 
@@ -12,7 +22,7 @@ class RouteTable:
     # 🔄 reload(): 从 Redis 同步整个路由表
     # ------------------------------------------------------------------
     def reload(self):
-        self._routes = self.r.hgetall("routes") or {}
+        self._routes = self.r.hgetall(self.redis_key) or {}
 
     # ------------------------------------------------------------------
     # 🔍 resolve(): 根据 category + action 得到 URL
@@ -26,7 +36,7 @@ class RouteTable:
     # ------------------------------------------------------------------
     def __setitem__(self, key: str, value: str):
         self._routes[key] = value
-        self.r.hset("routes", key, value)
+        self.r.hset(self.redis_key, key, value)
 
     # ------------------------------------------------------------------
     # 🔧 add(): 和 __setitem__ 功能重复，但更直观
@@ -45,4 +55,3 @@ class RouteTable:
     # ------------------------------------------------------------------
     def all(self) -> dict:
         return dict(self._routes)
-

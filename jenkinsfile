@@ -33,7 +33,6 @@ pipeline {
           def branch = (env.BRANCH_NAME ?: 'unknown').replaceAll('[^0-9A-Za-z_.-]', '-')
           env.GIT_SHA_SHORT = sha
           env.SAFE_BRANCH  = branch
-          // tag 示例：feature-x-1a2b3c4
           env.IMAGE_TAG    = "${branch}-${sha}"
           echo "BRANCH_NAME=${env.BRANCH_NAME}"
           echo "IMAGE_TAG=${env.IMAGE_TAG}"
@@ -88,7 +87,8 @@ pipeline {
             script {
               def image = "${env.REGISTRY}/${env.IMAGE_NS}/gateway:${env.IMAGE_TAG}"
               sh """
-                docker build -t ${image} ./gateway
+                set -euo pipefail
+                docker build -t ${image} -f gateway/Dockerfile .
               """
               echo "Built: ${image}"
             }
@@ -101,7 +101,8 @@ pipeline {
             script {
               def image = "${env.REGISTRY}/${env.IMAGE_NS}/tools-basic:${env.IMAGE_TAG}"
               sh """
-                docker build -t ${image} ./components/tools-basic
+                set -euo pipefail
+                docker build -t ${image} -f components/tools-basic/Dockerfile .
               """
               echo "Built: ${image}"
             }
@@ -114,7 +115,8 @@ pipeline {
             script {
               def image = "${env.REGISTRY}/${env.IMAGE_NS}/esb:${env.IMAGE_TAG}"
               sh """
-                docker build -t ${image} ./components/esb
+                set -euo pipefail
+                docker build -t ${image} -f components/esb/Dockerfile .
               """
               echo "Built: ${image}"
             }
@@ -127,7 +129,8 @@ pipeline {
             script {
               def image = "${env.REGISTRY}/${env.IMAGE_NS}/nginx:${env.IMAGE_TAG}"
               sh """
-                docker build -t ${image} ./nginx
+                set -euo pipefail
+                docker build -t ${image} -f nginx/Dockerfile .
               """
               echo "Built: ${image}"
             }

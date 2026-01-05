@@ -1,4 +1,4 @@
 tests/*
-data/
 .venv/
 uv.lock
+data/

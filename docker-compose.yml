@@ -7,6 +7,8 @@ services:
       - gateway
     networks:
       - ai-net
+    volumes:
+      - ./data/nginx:/var/log/nginx
 
   gateway:
     build: ./gateway
@@ -14,11 +16,17 @@ services:
       - "8000:8000"
     depends_on:
       - tools-basic
+      - esb
       - redis
     networks:
       - ai-net
     volumes:
       - ./data/gateway:/app/data
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_KEY_PREFIX=aihub:gateway
 
   redis:
     image: redis:7 # 改成我们行里的Credis
@@ -35,6 +43,8 @@ services:
       - "7001"
     networks:
       - ai-net
+    volumes:
+      - ./data/tools-basic:/app/data
 
   esb:
     build: ./components/esb
@@ -44,6 +54,22 @@ services:
       - ai-net
     volumes:
       - ./data/esb:/app/data
+
+  orchestrator:
+    build: ./orchestrator
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_KEY_PREFIX=aihub:orchestrator
+      - STAGING_DIR=/app/data/staging
+    volumes:
+      - ./data/orchestrator:/app/data
+    networks:
+      - ai-net
+    ports:
+      - "7010:7010"
+    depends_on:
+      - redis
 
 networks:
   ai-net:

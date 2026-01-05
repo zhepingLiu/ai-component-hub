@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     API_PREFIX: str = "/api"
     GW_API_KEY: str | None = None  # 开发期可留空
@@ -9,6 +10,14 @@ class Settings(BaseSettings):
     ENABLE_RATE_LIMIT: bool = False
     TRUSTED_PROXIES: str = ""      # 内网可不配
     ROUTE_FILE: str = "/app/routes.yaml" # 路由文件路径
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: str | None = None
+    REDIS_KEY_PREFIX: str = "aihub:gateway"
+    LOG_DIR: str = "/app/data/logs"
+    LOG_LEVEL: str = "INFO"
+    LOG_RETENTION_DAYS: int = 10
 
     class Config:
         env_file = ".env"

@@ -4,9 +4,6 @@ COPY wheelhouse/ /wheels/
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-index --find-links=/wheels -r /tmp/requirements.txt
 COPY app ./app
-COPY routes.yaml ./routes.yaml
-COPY gunicorn.conf.py ./gunicorn.conf.py
-ENV PYTHONUNBUFFERED=1
-EXPOSE 8000
 
-CMD ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "--config", "./gunicorn.conf.py"]
+EXPOSE 7010
+CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "7010"]

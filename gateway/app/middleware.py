@@ -8,12 +8,14 @@ logger = logging.getLogger("gateway")
 class TraceLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         trace_id = request.headers.get("X-Trace-Id", str(uuid.uuid4()))
+        request_id = request.headers.get("X-Request-Id")
         start = time.time()
         try:
             response = await call_next(request)
             duration = round((time.time() - start)*1000, 2)
             logger.info({
                 "trace_id": trace_id,
+                "request_id": request_id,
                 "path": request.url.path,
                 "method": request.method,
                 "status": response.status_code,
