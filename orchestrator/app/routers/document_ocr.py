@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
 
 from ..config import settings
-from ..services.file_stage import download_to_staging
+from ..services.file_stage import (
+    download_to_staging,
+    split_url_for_esb,
+    upload_json_via_esb,
+)
 from ..services.agent_client import AgentClient
 from ..services.job_tracker import JobTracker
 from ..schemas.document_ocr_schemas import DocOCRReq, DocOCRResp
 
 
 router = APIRouter()
+logger = logging.getLogger("orchestrator")
 
 
 @router.post("/doc-ocr/run", response_model=DocOCRResp)
@@ -25,6 +34,8 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
     tracker = JobTracker(r)
 
     request_id = tracker.ensure_request_id(req.request_id)
+    trace_id = request.headers.get("X-Trace-Id")
+    logger.info({"event": "doc_ocr.received", "request_id": request_id, "trace_id": trace_id})
 
     # 1) 幂等：如果已经有结果/状态，直接返回
     _, existing = tracker.get_job(request_id)
@@ -45,6 +56,7 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
     try:
         # 3) 写入 RUNNING 状态（带 TTL）
         tracker.set_status(request_id, status="RUNNING", result=None, error=None, ttl=settings.JOB_TTL_SEC)
+        logger.info({"event": "doc_ocr.running", "request_id": request_id, "trace_id": trace_id})
 
         # 4) 下载文件到 staging（外部卷路径）
         filename = req.file.filename or "input.bin"
@@ -57,6 +69,7 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
         )
 
         # 5) 调用智能体平台（一期 stub）
+        # TODO: 我们需要切换成AB智能体的调用方式(利用appid, private还有departmentid)
         client = AgentClient(base_url="")  # 后续接真实平台时从 env/config 注入 base_url
         agent_res = await client.run_doc_ocr(local_file_path=staged.local_path, options=req.options)
 
@@ -68,9 +81,17 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
                 error=agent_res.error,
                 ttl=settings.JOB_TTL_SEC,
             )
+            logger.error(
+                {
+                    "event": "doc_ocr.failed",
+                    "request_id": request_id,
+                    "trace_id": trace_id,
+                    "error": agent_res.error,
+                }
+            )
             raise HTTPException(status_code=502, detail=agent_res.error or "agent upstream error")
 
-        # 6) 写入 SUCCEEDED 结果（带 TTL）
+        # 6) 写入 UPLOADING 状态（带 TTL）
         result = {
             "staged": {
                 "url": staged.url,
@@ -80,8 +101,46 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
             },
             "agent": agent_res.data,
         }
-        tracker.set_status(request_id, status="SUCCEEDED", result=result, error=None, ttl=settings.JOB_TTL_SEC)
+        tracker.set_status(request_id, status="UPLOADING", result=result, error=None, ttl=settings.JOB_TTL_SEC)
+        logger.info({"event": "doc_ocr.uploading", "request_id": request_id, "trace_id": trace_id})
 
+        # 7) 上传智能体结果到文件服务器（通过 ESB）
+        server_path, _ = split_url_for_esb(req.file.url)
+        upload_filename = f"{request_id}-result.json"
+        upload_path = Path(settings.STAGING_DIR) / request_id / upload_filename
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_text(json.dumps(agent_res.data, ensure_ascii=False), encoding="utf-8")
+
+        try:
+            await upload_json_via_esb(
+                server_path=server_path,
+                server_file=upload_filename,
+                payload=agent_res.data,
+                local_file_path=str(upload_path),
+            )
+        except Exception as e:
+            tracker.set_status(
+                request_id,
+                status="FAILED",
+                result=None,
+                error=f"upload_failed: {e}",
+                ttl=settings.JOB_TTL_SEC,
+            )
+            logger.error(
+                {
+                    "event": "doc_ocr.upload_failed",
+                    "request_id": request_id,
+                    "trace_id": trace_id,
+                    "error": str(e),
+                }
+            )
+            raise HTTPException(status_code=502, detail="upload_to_esb_failed")
+
+        result["esb_upload"] = {"server_path": server_path, "server_file": upload_filename}
+        tracker.set_status(request_id, status="SUCCEEDED", result=result, error=None, ttl=settings.JOB_TTL_SEC)
+        logger.info({"event": "doc_ocr.succeeded", "request_id": request_id, "trace_id": trace_id})
+        
+        
         return DocOCRResp(request_id=request_id, status="SUCCEEDED", result=result)
 
     finally:

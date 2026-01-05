@@ -25,5 +25,10 @@ class Settings(BaseSettings):
     # ESB service base URL（同 docker-compose 内服务名）
     ESB_BASE_URL: str = os.getenv("ESB_BASE_URL", "http://esb:7002")
 
+    # Logging
+    LOG_DIR: str = os.getenv("LOG_DIR", "/app/data/logs")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "10"))
+
 
 settings = Settings()

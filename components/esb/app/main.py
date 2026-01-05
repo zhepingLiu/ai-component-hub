@@ -1,9 +1,20 @@
+import logging
+import os
+from typing import AsyncIterator
+
+import httpx
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, JSONResponse
+
 from app.schemas import UploadReq, DownloadReq
-import httpx
-import os
-from typing import AsyncIterator, Optional
+from app.logging_utils import setup_logging
+
+LOG_DIR = os.getenv("LOG_DIR", "/app/data/logs")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "10"))
+
+setup_logging("esb", LOG_DIR, LOG_LEVEL, LOG_RETENTION_DAYS)
+logger = logging.getLogger("esb")
 
 app = FastAPI()
 
@@ -23,7 +34,7 @@ async def esb_download(req: DownloadReq):
     local_file_path = req.local_file_path
 
     if not server_path or not server_file:
-        print("参数不能为空")
+        logger.warning({"event": "esb.download.invalid", "server_path": server_path, "server_file": server_file})
         return JSONResponse(content=False, status_code=400)
 
     # 拼接 URL
@@ -40,7 +51,7 @@ async def esb_download(req: DownloadReq):
                         if chunk:
                             yield chunk
         except Exception as e:
-            print("下载失败:", e)
+            logger.error({"event": "esb.download.failed", "url": url, "error": str(e)})
             # 触发 FastAPI 重新抛出异常，返回 502
             raise
 
@@ -52,11 +63,19 @@ async def esb_download(req: DownloadReq):
                 async for chunk in _stream():
                     f.write(chunk)
         except Exception as e:
-            print("写入本地文件失败:", e)
+            logger.error(
+                {
+                    "event": "esb.download.write_failed",
+                    "local_file_path": local_file_path,
+                    "error": str(e),
+                }
+            )
             return JSONResponse(content=False)
 
+        logger.info({"event": "esb.download.saved", "url": url, "local_file_path": local_file_path})
         return JSONResponse(content=True)
 
+    logger.info({"event": "esb.download.stream", "url": url})
     return StreamingResponse(_stream(), media_type="application/octet-stream")
 
 
@@ -70,12 +89,19 @@ async def esb_upload(req: UploadReq):
     local_file_path = req.local_file_path
 
     if not server_path or not server_file or not local_file_path:
-        print("参数不能为空")
+        logger.warning(
+            {
+                "event": "esb.upload.invalid",
+                "server_path": server_path,
+                "server_file": server_file,
+                "local_file_path": local_file_path,
+            }
+        )
         return JSONResponse(content=False)
 
     # 检查容器内部文件是否存在
     if not os.path.exists(local_file_path):
-        print("本地文件不存在:", local_file_path)
+        logger.warning({"event": "esb.upload.missing_local", "local_file_path": local_file_path})
         return JSONResponse(content=False)
 
     # 读取本地文件
@@ -83,7 +109,7 @@ async def esb_upload(req: UploadReq):
         with open(local_file_path, "rb") as f:
             file_bytes = f.read()
     except Exception as e:
-        print("读取本地文件失败:", e)
+        logger.error({"event": "esb.upload.read_failed", "local_file_path": local_file_path, "error": str(e)})
         return JSONResponse(content=False)
 
     # ESB 上传地址
@@ -99,7 +125,8 @@ async def esb_upload(req: UploadReq):
             resp = await client.post(url, files=files)
             resp.raise_for_status()
     except Exception as e:
-        print("上传失败:", e)
+        logger.error({"event": "esb.upload.failed", "url": url, "error": str(e)})
         return JSONResponse(content=False)
 
+    logger.info({"event": "esb.upload.succeeded", "server_path": server_path, "server_file": server_file})
     return JSONResponse(content=True)

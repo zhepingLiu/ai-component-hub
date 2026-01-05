@@ -7,6 +7,8 @@ services:
       - gateway
     networks:
       - ai-net
+    volumes:
+      - ./data/nginx:/var/log/nginx
 
   gateway:
     build: ./gateway
@@ -14,6 +16,9 @@ services:
       - "8000:8000"
     depends_on:
       - tools-basic
+      - esb
+      - orchestrator
+      - nginx
       - redis
     networks:
       - ai-net
@@ -40,6 +45,8 @@ services:
       - "7001"
     networks:
       - ai-net
+    volumes:
+      - ./data/tools-basic:/app/data
 
   esb:
     build: ./components/esb
