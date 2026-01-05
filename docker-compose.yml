@@ -16,6 +16,9 @@ services:
       - "8000:8000"
     depends_on:
       - tools-basic
+      - esb
+      - orchestrator
+      - nginx
       - redis
     networks:
       - ai-net
