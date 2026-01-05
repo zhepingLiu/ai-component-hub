@@ -1,10 +1,20 @@
 import asyncio
-import httpx
+import logging
 import os
+
+import httpx
 
 from .schemas import AddReq, StdResp
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from .logging_utils import setup_logging
+
+LOG_DIR = os.getenv("LOG_DIR", "/app/data/logs")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "10"))
+
+setup_logging("tools-basic", LOG_DIR, LOG_LEVEL, LOG_RETENTION_DAYS)
+logger = logging.getLogger("tools-basic")
 
 app = FastAPI(title="tools-basic")
 
@@ -14,10 +24,12 @@ def health():
 
 @app.get("/echo")
 def echo(q: str = "hello"):
+    logger.info({"event": "tools.echo", "q": q})
     return StdResp(data={"echo": q})
 
 @app.post("/add")
 def add(req: AddReq):
+    logger.info({"event": "tools.add", "a": req.a, "b": req.b})
     return StdResp(data={"sum": req.a + req.b})
 
 # TODO: 自动注册的代码,目前有bug

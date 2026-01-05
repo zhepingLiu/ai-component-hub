@@ -1,6 +1,7 @@
 import json, httpx, logging, yaml
 
 from .config import settings
+from .logging_utils import setup_logging
 from .middleware import TraceLogMiddleware, ApiKeyMiddleware
 from .schemas import StdResp
 from .schemas import RouteEntry
@@ -19,7 +20,12 @@ from slowapi.errors import RateLimitExceeded
 limiter = Limiter(key_func=get_remote_address)
 
 # ---------------- Logging ----------------
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+setup_logging(
+    service_name="gateway",
+    log_dir=settings.LOG_DIR,
+    level=settings.LOG_LEVEL,
+    retention_days=settings.LOG_RETENTION_DAYS,
+)
 logger = logging.getLogger("gateway")
 
 # ---------------- App ----------------
@@ -49,12 +55,14 @@ def health():
 @app.get("/routes/reload")
 def reload_routes():
     routes.reload()
+    logger.info({"event": "routes.reload"})
     return StdResp(code=0, message="routes reloaded").model_dump()
 
 @app.post("/register")
 def register(ep: RouteEntry):
     key = f"{ep.category}.{ep.action}"
     routes.add(key, ep.url)
+    logger.info({"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url})
     return {"code": 0, "msg": "ok"}
 
 @limiter.limit("60/minute")
@@ -62,6 +70,15 @@ def register(ep: RouteEntry):
 async def proxy(category: str, action: str, request: Request):
     target = routes.resolve(category, action)
     if not target:
+        logger.warning(
+            {
+                "event": "routes.miss",
+                "category": category,
+                "action": action,
+                "trace_id": request.headers.get("X-Trace-Id"),
+                "request_id": request.headers.get("X-Request-Id"),
+            }
+        )
         raise HTTPException(status_code=404, detail="component_not_found")
 
     key = request.headers.get("X-Api-Key", "")
@@ -85,6 +102,7 @@ async def proxy(category: str, action: str, request: Request):
         
     # 透传 Trace-ID
     headers.setdefault("X-Trace-Id", request.headers.get("X-Trace-Id", ""))
+    headers.setdefault("X-Request-Id", request.headers.get("X-Request-Id", ""))
 
     # GET/POST 支持：GET 透传 query，POST 透传 json
     params = dict(request.query_params)

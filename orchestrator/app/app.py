@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from fastapi import FastAPI
 
 from .health import router as health_router
 from .redis_client import create_redis_client
+from .logging_utils import setup_logging
+from .config import settings
 
 from .routers.document_ocr import router as doc_ocr_router
+
+setup_logging(
+    service_name="orchestrator",
+    log_dir=settings.LOG_DIR,
+    level=settings.LOG_LEVEL,
+    retention_days=settings.LOG_RETENTION_DAYS,
+)
+logger = logging.getLogger("orchestrator")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -16,6 +27,7 @@ async def lifespan(app: FastAPI):
     # 强制连通性检查：如果 Redis 不可用，直接让服务启动失败
     # 这样上线时不会出现“跑起来了但执行不了”的半死状态
     r.ping()
+    logger.info({"event": "redis.ping.ok"})
 
     app.state.redis = r
     try:

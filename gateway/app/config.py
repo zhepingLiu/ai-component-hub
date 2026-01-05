@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     REDIS_PASSWORD: str | None = None
     REDIS_KEY_PREFIX: str = "aihub:gateway"
+    LOG_DIR: str = "/app/data/logs"
+    LOG_LEVEL: str = "INFO"
+    LOG_RETENTION_DAYS: int = 10
 
     class Config:
         env_file = ".env"
