@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import AsyncIterator
@@ -5,6 +6,7 @@ from typing import AsyncIterator
 import httpx
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, JSONResponse
+from contextlib import asynccontextmanager
 
 from app.schemas import UploadReq, DownloadReq
 from app.logging_utils import setup_logging
@@ -16,7 +18,60 @@ LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "10"))
 setup_logging("esb", LOG_DIR, LOG_LEVEL, LOG_RETENTION_DAYS)
 logger = logging.getLogger("esb")
 
-app = FastAPI()
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8000")
+GW_API_KEY = os.getenv("GW_API_KEY")
+
+REGISTER_RETRY_SECONDS = 2
+REGISTER_MAX_ATTEMPTS = 15
+
+async def register_to_gateway():
+    endpoints = [
+        {"category": "tools", "action": "esb-download", "url": "http://esb:7002/esb-download"},
+        {"category": "tools", "action": "esb-upload", "url": "http://esb:7002/esb-upload"},
+    ]
+
+    headers = {"X-Api-Key": GW_API_KEY} if GW_API_KEY else {}
+
+    async with httpx.AsyncClient() as client:
+        for ep in endpoints:
+            ok = False
+            for attempt in range(1, REGISTER_MAX_ATTEMPTS + 1):
+                try:
+                    resp = await client.post(f"{GATEWAY_URL}/register", json=ep, headers=headers, timeout=5)
+                    if resp.status_code == 200:
+                        ok = True
+                        logger.info(
+                            {"event": "gateway.registered", "action": ep["action"], "status": resp.status_code}
+                        )
+                        break
+                    logger.warning(
+                        {
+                            "event": "gateway.register.failed",
+                            "action": ep["action"],
+                            "status": resp.status_code,
+                            "attempt": attempt,
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(
+                        {
+                            "event": "gateway.register.error",
+                            "action": ep["action"],
+                            "attempt": attempt,
+                            "error": str(e),
+                        }
+                    )
+                await asyncio.sleep(REGISTER_RETRY_SECONDS)
+            if not ok:
+                logger.error({"event": "gateway.register.giveup", "action": ep["action"]})
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await register_to_gateway()
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 # 固定配置（你的 ESB 文件服务器地址）
 SERVER_BASE_URL = "http://fserver.sit.cqrcb.com:21014"
