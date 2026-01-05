@@ -1,51 +1,52 @@
-pipeline {
-  agent any
+def docker_registry_url = '' // TODO: 填写你的镜像仓库
+def docker_registry_credential = '' // TODO: 如需登录仓库
+def docker_info = 'kjb-docker-dev'
+def docker_image = docker_registry_url ? "${docker_registry_url}/docker:24.0" : "docker:24.0"
+def label = "docker-${UUID.randomUUID().toString()}"
 
-  options {
-    timestamps()
-    ansiColor('xterm')
-    disableConcurrentBuilds()
-    buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
-  }
+properties([
+  disableConcurrentBuilds(),
+  buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+])
 
-  environment {
-    // ====== 你们内网镜像仓库（按需改）======
-    REGISTRY = 'registry.intra.example.com'
-    IMAGE_NS = 'ai-component-hub'
+podTemplate(
+  label: label,
+  containers: [
+    containerTemplate(name: 'docker', image: docker_image, command: 'cat', ttyEnabled: true)
+  ],
+  serviceAccount: 'jenkins-admin',
+  volumes: [
+    hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock')
+  ]
+) {
+  node(label) {
+    container('docker') {
+      env.REGISTRY = docker_registry_url ?: 'registry.intra.example.com'
+      env.IMAGE_NS = 'ai-component-hub'
+      env.DOCKER_BUILDKIT = '1'
+      env.COMPOSE_DOCKER_CLI_BUILD = '1'
 
-    // ====== Docker BuildKit（建议开启）======
-    DOCKER_BUILDKIT = '1'
-    COMPOSE_DOCKER_CLI_BUILD = '1'
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
+      stage('Checkout') {
         checkout scm
         sh 'git rev-parse --short HEAD > .git_short_sha'
       }
-    }
 
-    stage('Compute Image Tags') {
-      steps {
-        script {
-          def sha = readFile('.git_short_sha').trim()
-          def branch = (env.BRANCH_NAME ?: 'unknown').replaceAll('[^0-9A-Za-z_.-]', '-')
-          env.GIT_SHA_SHORT = sha
-          env.SAFE_BRANCH  = branch
-          env.IMAGE_TAG    = "${branch}-${sha}"
-          echo "BRANCH_NAME=${env.BRANCH_NAME}"
-          echo "IMAGE_TAG=${env.IMAGE_TAG}"
-        }
+      stage('Compute Image Tags') {
+        def sha = readFile('.git_short_sha').trim()
+        def branch = (env.BRANCH_NAME ?: 'unknown').replaceAll('[^0-9A-Za-z_.-]', '-')
+        env.GIT_SHA_SHORT = sha
+        env.SAFE_BRANCH = branch
+        env.IMAGE_TAG = "${branch}-${sha}"
+        echo "REGISTRY=${env.REGISTRY}"
+        echo "IMAGE_NS=${env.IMAGE_NS}"
+        echo "BRANCH_NAME=${env.BRANCH_NAME}"
+        echo "IMAGE_TAG=${env.IMAGE_TAG}"
       }
-    }
 
-    stage('Detect Changes') {
-      steps {
-        script {
-          // Multibranch 在 PR 场景通常有 CHANGE_TARGET；普通分支构建没有
-          def target = env.CHANGE_TARGET
-          def diffBase = target ? "origin/${target}" : "HEAD~1"
+      stage('Detect Changes') {
+        // Multibranch 在 PR 场景通常有 CHANGE_TARGET；普通分支构建没有
+        def target = env.CHANGE_TARGET
+        def diffBase = target ? "origin/${target}" : "HEAD~1"
 
           // 取变更文件列表；首次构建/找不到 diffBase 时，直接全量构建
           def changed = ''
@@ -64,7 +65,8 @@ pipeline {
           env.BUILD_GATEWAY = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('gateway/') }) ? 'true' : 'false'
           env.BUILD_TOOLS_BASIC = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('components/tools-basic/') }) ? 'true' : 'false'
           env.BUILD_ESB = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('components/esb/') }) ? 'true' : 'false'
-          env.BUILD_NGINX = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('nginx/') }) ? 'true' : 'false'
+        env.BUILD_NGINX = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('nginx/') }) ? 'true' : 'false'
+        env.BUILD_ORCHESTRATOR = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('orchestrator/') }) ? 'true' : 'false'
 
           // 如果改的是根目录公共文件（如 docker-compose.yml、共享脚本），通常需要全量构建
           if (changed.readLines().any { it == 'docker-compose.yml' || it == 'Jenkinsfile' || it.startsWith('.github/') }) {
@@ -72,102 +74,81 @@ pipeline {
             env.BUILD_TOOLS_BASIC = 'true'
             env.BUILD_ESB = 'true'
             env.BUILD_NGINX = 'true'
+            env.BUILD_ORCHESTRATOR = 'true'
           }
 
-          echo "Build flags: gateway=${env.BUILD_GATEWAY}, tools-basic=${env.BUILD_TOOLS_BASIC}, esb=${env.BUILD_ESB}, nginx=${env.BUILD_NGINX}"
+        echo "Build flags: gateway=${env.BUILD_GATEWAY}, tools-basic=${env.BUILD_TOOLS_BASIC}, esb=${env.BUILD_ESB}, nginx=${env.BUILD_NGINX}, orchestrator=${env.BUILD_ORCHESTRATOR}"
+      }
+
+      stage('Build Images (Parallel)') {
+        def tasks = [:]
+
+        if (env.BUILD_GATEWAY == 'true') {
+          tasks['Build gateway'] = {
+            if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
+            def image = "${env.REGISTRY}/${env.IMAGE_NS}/gateway:${env.IMAGE_TAG}"
+            sh """
+              set -eu
+              docker build -t ${image} -f gateway/Dockerfile .
+            """
+            echo "Built: ${image}"
+          }
+        }
+
+        if (env.BUILD_TOOLS_BASIC == 'true') {
+          tasks['Build tools-basic'] = {
+            if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
+            def image = "${env.REGISTRY}/${env.IMAGE_NS}/tools-basic:${env.IMAGE_TAG}"
+            sh """
+              set -eu
+              docker build -t ${image} -f components/tools-basic/Dockerfile .
+            """
+            echo "Built: ${image}"
+          }
+        }
+
+        if (env.BUILD_ESB == 'true') {
+          tasks['Build esb'] = {
+            if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
+            def image = "${env.REGISTRY}/${env.IMAGE_NS}/esb:${env.IMAGE_TAG}"
+            sh """
+              set -eu
+              docker build -t ${image} -f components/esb/Dockerfile .
+            """
+            echo "Built: ${image}"
+          }
+        }
+
+        if (env.BUILD_NGINX == 'true') {
+          tasks['Build nginx'] = {
+            if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
+            def image = "${env.REGISTRY}/${env.IMAGE_NS}/nginx:${env.IMAGE_TAG}"
+            sh """
+              set -eu
+              docker build -t ${image} -f nginx/Dockerfile .
+            """
+            echo "Built: ${image}"
+          }
+        }
+
+        if (env.BUILD_ORCHESTRATOR == 'true') {
+          tasks['Build orchestrator'] = {
+            if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
+            def image = "${env.REGISTRY}/${env.IMAGE_NS}/orchestrator:${env.IMAGE_TAG}"
+            sh """
+              set -eu
+              docker build -t ${image} -f orchestrator/Dockerfile .
+            """
+            echo "Built: ${image}"
+          }
+        }
+
+        if (tasks.isEmpty()) {
+          echo 'No images to build.'
+        } else {
+          parallel tasks
         }
       }
-    }
-
-    stage('Build Images (Parallel)') {
-      parallel {
-        stage('Build gateway') {
-          when { expression { env.BUILD_GATEWAY == 'true' } }
-          steps {
-            script {
-              def image = "${env.REGISTRY}/${env.IMAGE_NS}/gateway:${env.IMAGE_TAG}"
-              sh """
-                set -euo pipefail
-                docker build -t ${image} -f gateway/Dockerfile .
-              """
-              echo "Built: ${image}"
-            }
-          }
-        }
-
-        stage('Build tools-basic') {
-          when { expression { env.BUILD_TOOLS_BASIC == 'true' } }
-          steps {
-            script {
-              def image = "${env.REGISTRY}/${env.IMAGE_NS}/tools-basic:${env.IMAGE_TAG}"
-              sh """
-                set -euo pipefail
-                docker build -t ${image} -f components/tools-basic/Dockerfile .
-              """
-              echo "Built: ${image}"
-            }
-          }
-        }
-
-        stage('Build esb') {
-          when { expression { env.BUILD_ESB == 'true' } }
-          steps {
-            script {
-              def image = "${env.REGISTRY}/${env.IMAGE_NS}/esb:${env.IMAGE_TAG}"
-              sh """
-                set -euo pipefail
-                docker build -t ${image} -f components/esb/Dockerfile .
-              """
-              echo "Built: ${image}"
-            }
-          }
-        }
-
-        stage('Build nginx') {
-          when { expression { env.BUILD_NGINX == 'true' } }
-          steps {
-            script {
-              def image = "${env.REGISTRY}/${env.IMAGE_NS}/nginx:${env.IMAGE_TAG}"
-              sh """
-                set -euo pipefail
-                docker build -t ${image} -f nginx/Dockerfile .
-              """
-              echo "Built: ${image}"
-            }
-          }
-        }
-      }
-    }
-
-    // ====== 可选：Push 镜像（建议先关掉，等你配好凭证再打开）======
-    // stage('Push Images') {
-    //   when { anyOf { branch 'main'; branch 'master'; branch 'release/*' } }
-    //   steps {
-    //     withCredentials([usernamePassword(credentialsId: 'docker-registry-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-    //       sh """
-    //         echo "$DOCKER_PASS" | docker login ${REGISTRY} -u "$DOCKER_USER" --password-stdin
-    //       """
-    //     }
-    //
-    //     script {
-    //       if (env.BUILD_GATEWAY == 'true')     sh "docker push ${REGISTRY}/${IMAGE_NS}/gateway:${IMAGE_TAG}"
-    //       if (env.BUILD_TOOLS_BASIC == 'true') sh "docker push ${REGISTRY}/${IMAGE_NS}/tools-basic:${IMAGE_TAG}"
-    //       if (env.BUILD_ESB == 'true')         sh "docker push ${REGISTRY}/${IMAGE_NS}/esb:${IMAGE_TAG}"
-    //       if (env.BUILD_NGINX == 'true')       sh "docker push ${REGISTRY}/${IMAGE_NS}/nginx:${IMAGE_TAG}"
-    //     }
-    //   }
-    // }
-  }
-
-  post {
-    always {
-      sh 'docker image prune -f || true'
-    }
-    success {
-      echo "Build succeeded: ${env.IMAGE_TAG}"
-    }
-    failure {
-      echo "Build failed"
     }
   }
 }
