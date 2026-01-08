@@ -12,6 +12,7 @@ properties([
 podTemplate(
   label: label,
   containers: [
+    containerTemplate(name: 'jnlp', image: "${docker_registry_url}/cqrcb-docker-group/jenkins/inbound-agent:4.13-1-jdk11"),
     containerTemplate(name: 'docker', image: docker_image, command: 'cat', ttyEnabled: true)
   ],
   serviceAccount: 'jenkins-admin',
@@ -25,22 +26,57 @@ podTemplate(
       env.IMAGE_NS = 'ai-component-hub'
       env.DOCKER_BUILDKIT = '1'
       env.COMPOSE_DOCKER_CLI_BUILD = '1'
+      env.VERSION = '1.0.0'
 
       stage('Checkout') {
         checkout scm
-        sh 'git rev-parse --short HEAD > .git_short_sha'
+        // sh 'git rev-parse --short HEAD > .git_short_sha'
       }
 
-      stage('Compute Image Tags') {
-        def sha = readFile('.git_short_sha').trim()
-        def branch = (env.BRANCH_NAME ?: 'unknown').replaceAll('[^0-9A-Za-z_.-]', '-')
-        env.GIT_SHA_SHORT = sha
-        env.SAFE_BRANCH = branch
-        env.IMAGE_TAG = "${branch}-${sha}"
-        echo "REGISTRY=${env.REGISTRY}"
-        echo "IMAGE_NS=${env.IMAGE_NS}"
-        echo "BRANCH_NAME=${env.BRANCH_NAME}"
-        echo "IMAGE_TAG=${env.IMAGE_TAG}"
+      // stage('Compute Image Tags') {
+      //   def sha = readFile('.git_short_sha').trim()
+      //   def branch = (env.BRANCH_NAME ?: 'unknown').replaceAll('[^0-9A-Za-z_.-]', '-')
+      //   env.GIT_SHA_SHORT = sha
+      //   env.SAFE_BRANCH = branch
+      //   env.IMAGE_TAG = "${branch}-${sha}"
+      //   echo "REGISTRY=${env.REGISTRY}"
+      //   echo "IMAGE_NS=${env.IMAGE_NS}"
+      //   echo "BRANCH_NAME=${env.BRANCH_NAME}"
+      //   echo "IMAGE_TAG=${env.IMAGE_TAG}"
+      // }
+
+      stage('Prepare Config') {
+        def branch = (env.BRANCH_NAME ?: '').toLowerCase()
+        def envName = 'unknown'
+        if (branch.contains('dev')) {
+          envName = 'DEV'
+        } else if (branch.contains('sit')) {
+          envName = 'SIT'
+        } else if (branch.contains('master') || branch.contains('uat')) {
+          envName = 'UAT'
+        } else if (branch.contains('prod')) {
+          envName = 'PROD'
+        }
+        env.ENV_NAME = envName
+        echo "ENV_NAME=${env.ENV_NAME}"
+
+        // def cfg = [:]
+        // try {
+        //   cfg = readJSON file: 'config.json'
+        // } catch (err) {
+        //   echo "config.json not found or invalid, skip env repo mapping."
+        // }
+        // def repoName = cfg?.get(env.ENV_NAME)?.get('docker_repo_name')
+        // if (repoName) {
+        //   env.DOCKER_REPO_NAME = repoName.toString()
+        //   echo "DOCKER_REPO_NAME=${env.DOCKER_REPO_NAME}"
+        // } else {
+        //   echo "DOCKER_REPO_NAME not set for ENV_NAME=${env.ENV_NAME}"
+        // }
+
+        def repoName = 'cqrcb-docker-group'
+        env.DOCKER_REPO_NAME = repoName.toString()
+        echo "DOCKER_REPO_NAME=${env.DOCKER_REPO_NAME}"
       }
 
       stage('Detect Changes') {
@@ -48,49 +84,78 @@ podTemplate(
         def target = env.CHANGE_TARGET
         def diffBase = target ? "origin/${target}" : "HEAD~1"
 
-          // 取变更文件列表；首次构建/找不到 diffBase 时，直接全量构建
-          def changed = ''
-          try {
-            sh "git fetch --all --prune"
-            changed = sh(script: "git diff --name-only ${diffBase}..HEAD", returnStdout: true).trim()
-          } catch (err) {
-            echo "Diff base unavailable (${diffBase}). Fallback to full build."
-            changed = '__FULL_BUILD__'
-          }
+        // 取变更文件列表；首次构建/找不到 diffBase 时，直接全量构建
+        def changed = ''
+        try {
+          sh "git fetch --all --prune"
+          changed = sh(script: "git diff --name-only ${diffBase}..HEAD", returnStdout: true).trim()
+        } catch (err) {
+          echo "Diff base unavailable (${diffBase}). Fallback to full build."
+          changed = '__FULL_BUILD__'
+        }
 
-          env.CHANGED_FILES = changed
-          echo "Changed files:\n${env.CHANGED_FILES}"
+        env.CHANGED_FILES = changed
+        echo "Changed files:\n${env.CHANGED_FILES}"
 
-          // 计算哪些组件需要构建
-          env.BUILD_GATEWAY = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('gateway/') }) ? 'true' : 'false'
-          env.BUILD_TOOLS_BASIC = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('components/tools-basic/') }) ? 'true' : 'false'
-          env.BUILD_ESB = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('components/esb/') }) ? 'true' : 'false'
+        // 计算哪些组件需要构建
+        env.BUILD_GATEWAY = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('gateway/') }) ? 'true' : 'false'
+        env.BUILD_TOOLS_BASIC = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('components/tools-basic/') }) ? 'true' : 'false'
+        env.BUILD_ESB = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('components/esb/') }) ? 'true' : 'false'
         env.BUILD_NGINX = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('nginx/') }) ? 'true' : 'false'
         env.BUILD_ORCHESTRATOR = (changed.contains('__FULL_BUILD__') || changed.readLines().any { it.startsWith('orchestrator/') }) ? 'true' : 'false'
 
-          // 如果改的是根目录公共文件（如 docker-compose.yml、共享脚本），通常需要全量构建
-          if (changed.readLines().any { it == 'docker-compose.yml' || it == 'Jenkinsfile' || it.startsWith('.github/') }) {
-            env.BUILD_GATEWAY = 'true'
-            env.BUILD_TOOLS_BASIC = 'true'
-            env.BUILD_ESB = 'true'
-            env.BUILD_NGINX = 'true'
-            env.BUILD_ORCHESTRATOR = 'true'
-          }
+        // 如果改的是根目录公共文件（如 docker-compose.yml、共享脚本），通常需要全量构建
+        if (changed.readLines().any { it == 'docker-compose.yml' || it == 'Jenkinsfile' || it.startsWith('.github/') }) {
+          env.BUILD_GATEWAY = 'true'
+          env.BUILD_TOOLS_BASIC = 'true'
+          env.BUILD_ESB = 'true'
+          env.BUILD_NGINX = 'true'
+          env.BUILD_ORCHESTRATOR = 'true'
+        }
 
         echo "Build flags: gateway=${env.BUILD_GATEWAY}, tools-basic=${env.BUILD_TOOLS_BASIC}, esb=${env.BUILD_ESB}, nginx=${env.BUILD_NGINX}, orchestrator=${env.BUILD_ORCHESTRATOR}"
       }
 
       stage('Build Images (Parallel)') {
         def tasks = [:]
+        def repoNs = env.DOCKER_REPO_NAME ?: env.IMAGE_NS
+        def useRegistryCred = docker_registry_credential?.trim()
+
+        def tag = ''
+        try {
+          tag = sh(script: 'git describe --tags --abbrev=0', returnStdout: true).trim()
+        } catch (err) {
+          tag = env.VERSION
+        }
+
+        def baseVersion = tag.startsWith('v') ? tag.substring(1) : tag
+
+        env.IMAGE_TAG = "${baseVersion}-${env.ENV_NAME}"
+        echo "IMAGE_TAG=${env.IMAGE_TAG}"
 
         if (env.BUILD_GATEWAY == 'true') {
           tasks['Build gateway'] = {
             if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
-            def image = "${env.REGISTRY}/${env.IMAGE_NS}/gateway:${env.IMAGE_TAG}"
-            sh """
-              set -eu
-              docker build -t ${image} -f gateway/Dockerfile .
-            """
+            def image = "${env.REGISTRY}/${repoNs}/gateway:${env.IMAGE_TAG}"
+            if (useRegistryCred) {
+              withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                sh """
+                  set -eu
+                  echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
+                  docker build -t ${image} -f gateway/Dockerfile .
+                  docker push ${image}
+                  docker rmi ${image}
+                  docker logout ${env.REGISTRY}
+                """
+              }
+            } else {
+              echo "docker_registry_credential not set; skipping push for ${image}"
+              sh """
+                set -eu
+                docker build -t ${image} -f gateway/Dockerfile .
+                docker rmi ${image}
+              """
+            }
             echo "Built: ${image}"
           }
         }
@@ -98,11 +163,26 @@ podTemplate(
         if (env.BUILD_TOOLS_BASIC == 'true') {
           tasks['Build tools-basic'] = {
             if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
-            def image = "${env.REGISTRY}/${env.IMAGE_NS}/tools-basic:${env.IMAGE_TAG}"
-            sh """
-              set -eu
-              docker build -t ${image} -f components/tools-basic/Dockerfile .
-            """
+            def image = "${env.REGISTRY}/${repoNs}/tools-basic:${env.IMAGE_TAG}"
+            if (useRegistryCred) {
+              withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                sh """
+                  set -eu
+                  echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
+                  docker build -t ${image} -f components/tools-basic/Dockerfile .
+                  docker push ${image}
+                  docker rmi ${image}
+                  docker logout ${env.REGISTRY}
+                """
+              }
+            } else {
+              echo "docker_registry_credential not set; skipping push for ${image}"
+              sh """
+                set -eu
+                docker build -t ${image} -f components/tools-basic/Dockerfile .
+                docker rmi ${image}
+              """
+            }
             echo "Built: ${image}"
           }
         }
@@ -110,11 +190,26 @@ podTemplate(
         if (env.BUILD_ESB == 'true') {
           tasks['Build esb'] = {
             if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
-            def image = "${env.REGISTRY}/${env.IMAGE_NS}/esb:${env.IMAGE_TAG}"
-            sh """
-              set -eu
-              docker build -t ${image} -f components/esb/Dockerfile .
-            """
+            def image = "${env.REGISTRY}/${repoNs}/esb:${env.IMAGE_TAG}"
+            if (useRegistryCred) {
+              withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                sh """
+                  set -eu
+                  echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
+                  docker build -t ${image} -f components/esb/Dockerfile .
+                  docker push ${image}
+                  docker rmi ${image}
+                  docker logout ${env.REGISTRY}
+                """
+              }
+            } else {
+              echo "docker_registry_credential not set; skipping push for ${image}"
+              sh """
+                set -eu
+                docker build -t ${image} -f components/esb/Dockerfile .
+                docker rmi ${image}
+              """
+            }
             echo "Built: ${image}"
           }
         }
@@ -122,11 +217,26 @@ podTemplate(
         if (env.BUILD_NGINX == 'true') {
           tasks['Build nginx'] = {
             if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
-            def image = "${env.REGISTRY}/${env.IMAGE_NS}/nginx:${env.IMAGE_TAG}"
-            sh """
-              set -eu
-              docker build -t ${image} -f nginx/Dockerfile .
-            """
+            def image = "${env.REGISTRY}/${repoNs}/nginx:${env.IMAGE_TAG}"
+            if (useRegistryCred) {
+              withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                sh """
+                  set -eu
+                  echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
+                  docker build -t ${image} -f nginx/Dockerfile .
+                  docker push ${image}
+                  docker rmi ${image}
+                  docker logout ${env.REGISTRY}
+                """
+              }
+            } else {
+              echo "docker_registry_credential not set; skipping push for ${image}"
+              sh """
+                set -eu
+                docker build -t ${image} -f nginx/Dockerfile .
+                docker rmi ${image}
+              """
+            }
             echo "Built: ${image}"
           }
         }
@@ -134,11 +244,26 @@ podTemplate(
         if (env.BUILD_ORCHESTRATOR == 'true') {
           tasks['Build orchestrator'] = {
             if (!env.IMAGE_TAG) { error 'IMAGE_TAG is empty' }
-            def image = "${env.REGISTRY}/${env.IMAGE_NS}/orchestrator:${env.IMAGE_TAG}"
-            sh """
-              set -eu
-              docker build -t ${image} -f orchestrator/Dockerfile .
-            """
+            def image = "${env.REGISTRY}/${repoNs}/orchestrator:${env.IMAGE_TAG}"
+            if (useRegistryCred) {
+              withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                sh """
+                  set -eu
+                  echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
+                  docker build -t ${image} -f orchestrator/Dockerfile .
+                  docker push ${image}
+                  docker rmi ${image}
+                  docker logout ${env.REGISTRY}
+                """
+              }
+            } else {
+              echo "docker_registry_credential not set; skipping push for ${image}"
+              sh """
+                set -eu
+                docker build -t ${image} -f orchestrator/Dockerfile .
+                docker rmi ${image}
+              """
+            }
             echo "Built: ${image}"
           }
         }
