@@ -60,6 +60,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_KEY_PREFIX=aihub:orchestrator
       - STAGING_DIR=/app/data/staging
+      - AGENTS_BASE_URL=http://agents:7020
     volumes:
       - ./data/orchestrator:/app/data
     networks:
@@ -68,6 +69,26 @@ services:
       - "7010:7010"
     depends_on:
       - redis
+
+  agents:
+    build: ./agents
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_KEY_PREFIX=aihub:agents
+      - STAGING_DIR=/app/data/staging
+      - ESB_BASE_URL=http://esb:7002
+      - GATEWAY_URL=http://gateway:8000
+    volumes:
+      - ./data/agents:/app/data
+    networks:
+      - ai-net
+    ports:
+      - "7020:7020"
+    depends_on:
+      - redis
+      - esb
+      - gateway
 
 networks:
   ai-net:

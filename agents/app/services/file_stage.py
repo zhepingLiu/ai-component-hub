@@ -46,7 +46,7 @@ async def download_to_staging(
     payload = {
         "server_path": server_path,
         "server_file": server_file,
-        # 让 ESB 以流方式返回内容，由 orchestrator 写入 staging
+        # 让 ESB 以流方式返回内容，由 agents 写入 staging
         "local_file_path": None,
     }
 

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str | None = os.getenv("REDIS_PASSWORD") or None
 
     # Namespace（避免不同系统/环境 key 冲突）
-    REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "aihub:orchestrator")
+    REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "aihub:agents")
 
     # 任务/幂等相关默认 TTL（秒）
     IDEMPOTENCY_TTL_SEC: int = int(os.getenv("IDEMPOTENCY_TTL_SEC", "3600"))  # 1h
@@ -32,7 +32,11 @@ class Settings(BaseSettings):
 
     # Agent proxy
     REQUEST_TIMEOUT_SEC: float = float(os.getenv("REQUEST_TIMEOUT_SEC", "15.0"))
-    AGENTS_BASE_URL: str = os.getenv("AGENTS_BASE_URL", "http://agents:7020")
+
+    # Gateway registration
+    GATEWAY_URL: str = os.getenv("GATEWAY_URL", "http://gateway:8000")
+    GW_API_KEY: str | None = os.getenv("GW_API_KEY") or None
+    AGENTS_SERVICE_URL: str = os.getenv("AGENTS_SERVICE_URL", "http://agents:7020")
 
 
 settings = Settings()

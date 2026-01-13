@@ -18,7 +18,7 @@ from ..schemas.document_ocr_schemas import DocOCRReq, DocOCRResp
 
 
 router = APIRouter()
-logger = logging.getLogger("orchestrator")
+logger = logging.getLogger("agents")
 
 
 @router.post("/doc-ocr/run", response_model=DocOCRResp)

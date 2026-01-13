@@ -9,7 +9,7 @@ from .redis_client import create_redis_client
 from .logging_utils import setup_logging
 from .config import settings
 
-from .routers.document_ocr import router as doc_ocr_router
+from .routers.agents_proxy import router as agents_proxy_router
 from .routers.agent_gateway import router as agent_gateway_router
 
 setup_logging(
@@ -50,9 +50,9 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, tags=["health"])
     app.include_router(agent_gateway_router, tags=["agents"])
+    app.include_router(agents_proxy_router, prefix="/agents", tags=["agents"])
 
     return app
 
 
 app = create_app()
-app.include_router(doc_ocr_router, prefix="/agents", tags=["agents"])
