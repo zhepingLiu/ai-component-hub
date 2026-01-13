@@ -15,8 +15,6 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - tools-basic
-      - esb
       - redis
     networks:
       - ai-net
