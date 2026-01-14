@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from .health import router as health_router
 from .redis_client import create_redis_client
+from .route_table import YamlRouteTable
 from .logging_utils import setup_logging
 from .config import settings
 
@@ -22,21 +23,35 @@ logger = logging.getLogger("orchestrator")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 初始化 Redis（无状态服务的外部依赖）
-    r = create_redis_client()
+    app.state.redis = None
+    app.state.routes = None
 
-    # 强制连通性检查：如果 Redis 不可用，直接让服务启动失败
-    # 这样上线时不会出现“跑起来了但执行不了”的半死状态
-    r.ping()
-    logger.info({"event": "redis.ping.ok"})
+    if settings.ROUTE_SOURCE.lower() == "yaml":
+        try:
+            app.state.routes = YamlRouteTable(settings.ROUTE_FILE)
+            logger.info({"event": "routes.yaml.loaded", "route_file": settings.ROUTE_FILE})
+        except Exception as exc:
+            logger.exception({"event": "routes.yaml.load_failed", "error": str(exc)})
 
-    app.state.redis = r
+    if settings.REDIS_REQUIRED:
+        # 初始化 Redis（无状态服务的外部依赖）
+        r = create_redis_client()
+
+        # 强制连通性检查：如果 Redis 不可用，直接让服务启动失败
+        # 这样上线时不会出现“跑起来了但执行不了”的半死状态
+        r.ping()
+        logger.info({"event": "redis.ping.ok"})
+
+        app.state.redis = r
+    else:
+        logger.warning({"event": "redis.disabled"})
     try:
         yield
     finally:
         # redis-py 没有显式 close 也可，但这里做得更干净
         try:
-            r.close()
+            if app.state.redis:
+                app.state.redis.close()
         except Exception:
             pass
 

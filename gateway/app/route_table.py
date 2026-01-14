@@ -1,9 +1,41 @@
 import logging
+from pathlib import Path
+
 import redis
+import yaml
 
 from .config import Settings, settings as app_settings
 
 logger = logging.getLogger("gateway")
+
+
+class YamlRouteTable:
+    def __init__(self, route_file: str):
+        self.route_file = Path(route_file)
+        self._routes: dict[str, str] = {}
+        self.reload()
+
+    def _load(self) -> dict[str, str]:
+        if not self.route_file.exists():
+            raise FileNotFoundError(f"Routes file not found: {self.route_file}")
+        with self.route_file.open("r") as f:
+            data = yaml.safe_load(f) or {}
+        return {str(k): str(v) for k, v in data.items()}
+
+    def _persist(self) -> None:
+        self.route_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.route_file.open("w") as f:
+            yaml.safe_dump(self._routes, f, sort_keys=True)
+
+    def reload(self) -> None:
+        self._routes = self._load()
+
+    def resolve(self, category: str, action: str) -> str | None:
+        return self._routes.get(f"{category}.{action}")
+
+    def add(self, key: str, value: str) -> None:
+        self._routes[key] = value
+        self._persist()
 
 class RouteTable:
     def __init__(self, settings: Settings | None = None):

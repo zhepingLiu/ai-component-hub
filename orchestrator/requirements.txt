@@ -3,3 +3,4 @@ httpx
 uvicorn[standard]
 redis
 pydantic-settings
+PyYAML

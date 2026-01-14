@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from ..config import settings
 from ..redis_client import get_redis
-from ..route_table import RouteTable
+from ..route_table import RouteTable, YamlRouteTable
 from ..schemas.route_schemas import RouteEntry, StdResp
 
 
@@ -19,7 +19,11 @@ logger = logging.getLogger("orchestrator")
 
 @router.post("/register")
 def register(ep: RouteEntry, request: Request):
-    table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
+    if settings.ROUTE_SOURCE.lower() == "yaml":
+        table = request.app.state.routes or YamlRouteTable(settings.ROUTE_FILE)
+        request.app.state.routes = table
+    else:
+        table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
     key = f"{ep.category}.{ep.action}"
     table.add(key, ep.url)
     logger.info({"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url})
@@ -28,7 +32,11 @@ def register(ep: RouteEntry, request: Request):
 
 @router.api_route("/api/agents/{name}", methods=["GET", "POST"])
 async def proxy_agent(name: str, request: Request):
-    table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
+    if settings.ROUTE_SOURCE.lower() == "yaml":
+        table = request.app.state.routes or YamlRouteTable(settings.ROUTE_FILE)
+        request.app.state.routes = table
+    else:
+        table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
     target = table.resolve("agents", name)
     if not target:
         logger.warning(

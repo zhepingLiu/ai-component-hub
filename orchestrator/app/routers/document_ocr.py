@@ -31,6 +31,8 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
     - 调用智能体平台（先 stub）
     """
     r = request.app.state.redis  # type: ignore[attr-defined]
+    if not r:
+        raise HTTPException(status_code=503, detail="redis_not_ready")
     tracker = JobTracker(r)
 
     request_id = tracker.ensure_request_id(req.request_id)

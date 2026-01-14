@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = True
     ENABLE_RATE_LIMIT: bool = False
     TRUSTED_PROXIES: str = ""      # 内网可不配
+    ROUTE_SOURCE: str = "redis"    # redis|yaml
     ROUTE_FILE: str = "/app/routes.yaml" # 路由文件路径
     REDIS_HOST: str = "redis"
     REDIS_PORT: int = 6379

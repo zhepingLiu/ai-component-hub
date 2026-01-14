@@ -7,7 +7,7 @@ from .middleware import TraceLogMiddleware, ApiKeyMiddleware
 from .schemas import StdResp
 from .schemas import RouteEntry
 # from .routing import RouteTable
-from .route_table import RouteTable
+from .route_table import RouteTable, YamlRouteTable
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pathlib import Path
@@ -43,6 +43,7 @@ logger.info(
         "api_prefix": settings.API_PREFIX,
         "enable_metrics": settings.ENABLE_METRICS,
         "enable_rate_limit": settings.ENABLE_RATE_LIMIT,
+        "route_source": settings.ROUTE_SOURCE,
         "redis_host": settings.REDIS_HOST,
         "redis_port": settings.REDIS_PORT,
         "redis_db": settings.REDIS_DB,
@@ -53,6 +54,11 @@ logger.info(
         "log_level": settings.LOG_LEVEL,
     }
 )
+
+def _build_routes():
+    if settings.ROUTE_SOURCE.lower() == "yaml":
+        return YamlRouteTable(settings.ROUTE_FILE)
+    return RouteTable(settings=settings)
 
 # ---------------- App ----------------
 app = FastAPI(title="AI Component Gateway", version="0.1.0")
@@ -75,7 +81,7 @@ async def _init_routes_once(timeout_sec: float = 2.0) -> bool:
             return True
         try:
             app.state.routes = await asyncio.wait_for(
-                asyncio.to_thread(RouteTable, settings=settings),
+                asyncio.to_thread(_build_routes),
                 timeout=timeout_sec,
             )
             logger.info({"event": "routes.init_ok"})
