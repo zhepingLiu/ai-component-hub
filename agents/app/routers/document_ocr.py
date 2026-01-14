@@ -13,6 +13,7 @@ from ..services.file_stage import (
     upload_json_via_esb,
 )
 from ..services.agent_client import AgentClient
+from ..services.agent_config_store import get_agent_config
 from ..services.job_tracker import JobTracker
 from ..schemas.document_ocr_schemas import DocOCRReq, DocOCRResp
 
@@ -69,8 +70,27 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
         )
 
         # 5) 调用智能体平台（一期 stub）
-        # TODO: 我们需要切换成AB智能体的调用方式(利用appid, private还有departmentid)
-        client = AgentClient(base_url="")  # 后续接真实平台时从 env/config 注入 base_url
+        agent_config = get_agent_config(r, "doc-ocr")
+        if not agent_config:
+            tracker.set_status(
+                request_id,
+                status="FAILED",
+                result=None,
+                error="agent_config_missing",
+                ttl=settings.JOB_TTL_SEC,
+            )
+            logger.error({"event": "doc_ocr.config_missing", "request_id": request_id, "trace_id": trace_id})
+            raise HTTPException(status_code=500, detail="agent_config_missing")
+
+        client = AgentClient(
+            base_url=agent_config.get("url", ""),
+            conversation_url=agent_config.get("conversation_url", ""),
+            upload_url=agent_config.get("upload_url", ""),
+            run_url=agent_config.get("run_url", ""),
+            authorization=agent_config.get("authorization", ""),
+            app_id=agent_config.get("app_id", ""),
+            department_id=agent_config.get("department_id", ""),
+        )
         agent_res = await client.run_doc_ocr(local_file_path=staged.local_path, options=req.options)
 
         if not agent_res.ok:

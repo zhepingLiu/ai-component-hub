@@ -13,6 +13,7 @@ from .logging_utils import setup_logging
 from .config import settings
 
 from .routers.document_ocr import router as doc_ocr_router
+from .routers.agent_configs import router as agent_configs_router
 
 setup_logging(
     service_name="agents",
@@ -111,3 +112,4 @@ def create_app() -> FastAPI:
 
 app = create_app()
 app.include_router(doc_ocr_router, prefix="/agents", tags=["agents"])
+app.include_router(agent_configs_router, prefix="/agents", tags=["agents"])
