@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     REDIS_PASSWORD: str | None = None
     REDIS_KEY_PREFIX: str = "aihub:gateway"
+    REDIS_SOCKET_CONNECT_TIMEOUT: float = 1.0
+    REDIS_SOCKET_TIMEOUT: float = 1.0
     LOG_DIR: str = "/app/data/logs"
     LOG_LEVEL: str = "INFO"
     LOG_RETENTION_DAYS: int = 10

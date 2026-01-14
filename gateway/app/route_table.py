@@ -1,7 +1,9 @@
+import logging
 import redis
 
 from .config import Settings, settings as app_settings
 
+logger = logging.getLogger("gateway")
 
 class RouteTable:
     def __init__(self, settings: Settings | None = None):
@@ -14,6 +16,9 @@ class RouteTable:
             db=self.settings.REDIS_DB,
             password=self.settings.REDIS_PASSWORD,
             decode_responses=True,
+            socket_connect_timeout=self.settings.REDIS_SOCKET_CONNECT_TIMEOUT,
+            socket_timeout=self.settings.REDIS_SOCKET_TIMEOUT,
+            retry_on_timeout=True,
         )
         self._routes = {}
         self.reload()   # 启动时加载一次
@@ -22,7 +27,17 @@ class RouteTable:
     # 🔄 reload(): 从 Redis 同步整个路由表
     # ------------------------------------------------------------------
     def reload(self):
-        self._routes = self.r.hgetall(self.redis_key) or {}
+        try:
+            self._routes = self.r.hgetall(self.redis_key) or {}
+        except Exception as exc:
+            logger.exception(
+                {
+                    "event": "routes.reload_failed",
+                    "redis_key": self.redis_key,
+                    "error": str(exc),
+                }
+            )
+            self._routes = {}
 
     # ------------------------------------------------------------------
     # 🔍 resolve(): 根据 category + action 得到 URL

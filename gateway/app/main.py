@@ -1,3 +1,4 @@
+import asyncio
 import json, httpx, logging, yaml
 
 from .config import settings
@@ -28,20 +29,69 @@ setup_logging(
 )
 logger = logging.getLogger("gateway")
 
+# ---------------- Startup logging ----------------
+def _redact(value: str | None) -> str | None:
+    if not value:
+        return value
+    if len(value) <= 4:
+        return "*" * len(value)
+    return value[:2] + "*" * (len(value) - 4) + value[-2:]
+
+logger.info(
+    {
+        "event": "gateway.startup_config",
+        "api_prefix": settings.API_PREFIX,
+        "enable_metrics": settings.ENABLE_METRICS,
+        "enable_rate_limit": settings.ENABLE_RATE_LIMIT,
+        "redis_host": settings.REDIS_HOST,
+        "redis_port": settings.REDIS_PORT,
+        "redis_db": settings.REDIS_DB,
+        "redis_password": _redact(settings.REDIS_PASSWORD),
+        "redis_key_prefix": settings.REDIS_KEY_PREFIX,
+        "request_timeout_sec": settings.REQUEST_TIMEOUT_SEC,
+        "log_dir": settings.LOG_DIR,
+        "log_level": settings.LOG_LEVEL,
+    }
+)
+
 # ---------------- App ----------------
 app = FastAPI(title="AI Component Gateway", version="0.1.0")
 
 app.add_middleware(TraceLogMiddleware)
 app.add_middleware(ApiKeyMiddleware)
 app.state.limiter = limiter
+app.state.routes = None
+app.state.routes_lock = asyncio.Lock()
 
 # 指标
 if settings.ENABLE_METRICS:
     Instrumentator().instrument(app).expose(app)
 
-# ---------------- Load routes ----------------
-# routes = RouteTable(settings.ROUTE_FILE)
-routes = RouteTable(settings=settings)
+async def _init_routes_once(timeout_sec: float = 2.0) -> bool:
+    if app.state.routes:
+        return True
+    async with app.state.routes_lock:
+        if app.state.routes:
+            return True
+        try:
+            app.state.routes = await asyncio.wait_for(
+                asyncio.to_thread(RouteTable, settings=settings),
+                timeout=timeout_sec,
+            )
+            logger.info({"event": "routes.init_ok"})
+            return True
+        except asyncio.TimeoutError:
+            logger.warning({"event": "routes.init_timeout", "timeout_sec": timeout_sec})
+            app.state.routes = None
+            return False
+        except Exception as exc:
+            logger.exception({"event": "routes.init_failed", "error": str(exc)})
+            app.state.routes = None
+            return False
+
+@app.on_event("startup")
+async def _bootstrap_routes():
+    asyncio.create_task(_init_routes_once())
 
 # ---------------- Limit ----------------
 @app.exception_handler(RateLimitExceeded)
@@ -53,22 +103,29 @@ def health():
     return PlainTextResponse("ok")
 
 @app.get("/routes/reload")
-def reload_routes():
-    routes.reload()
+async def reload_routes():
+    ok = await _init_routes_once()
+    if not ok or not app.state.routes:
+        raise HTTPException(status_code=503, detail="routes_not_ready")
+    app.state.routes.reload()
     logger.info({"event": "routes.reload"})
     return StdResp(code=0, message="routes reloaded").model_dump()
 
 @app.post("/register")
 def register(ep: RouteEntry):
+    if not app.state.routes:
+        raise HTTPException(status_code=503, detail="routes_not_ready")
     key = f"{ep.category}.{ep.action}"
-    routes.add(key, ep.url)
+    app.state.routes.add(key, ep.url)
     logger.info({"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url})
     return {"code": 0, "msg": "ok"}
 
 @limiter.limit("60/minute")
 @app.api_route(f"{settings.API_PREFIX}" + "/{category}/{action}", methods=["GET","POST"])
 async def proxy(category: str, action: str, request: Request):
-    target = routes.resolve(category, action)
+    if not app.state.routes:
+        raise HTTPException(status_code=503, detail="routes_not_ready")
+    target = app.state.routes.resolve(category, action)
     if not target:
         logger.warning(
             {
