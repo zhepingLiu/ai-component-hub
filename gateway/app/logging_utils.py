@@ -24,7 +24,7 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             base["exc_info"] = self.formatException(record.exc_info)
 
-        return json.dumps(base, ensure_ascii=True)
+        return json.dumps(base, ensure_ascii=True, default=str)
 
 
 def setup_logging(service_name: str, log_dir: str, level: str, retention_days: int) -> None:

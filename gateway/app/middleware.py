@@ -8,7 +8,9 @@ logger = logging.getLogger("gateway")
 class TraceLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         trace_id = request.headers.get("X-Trace-Id", str(uuid.uuid4()))
-        request_id = request.headers.get("X-Request-Id")
+        request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
+        request.state.trace_id = trace_id
+        request.state.request_id = request_id
         start = time.time()
         try:
             response = await call_next(request)
@@ -22,6 +24,7 @@ class TraceLogMiddleware(BaseHTTPMiddleware):
                 "ms": duration
             })
             response.headers["X-Trace-Id"] = trace_id
+            response.headers["X-Request-Id"] = request_id
             return response
         except Exception as e:
             duration = round((time.time() - start)*1000, 2)

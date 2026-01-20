@@ -13,7 +13,7 @@ from ..services.file_stage import (
     upload_json_via_esb,
 )
 from ..services.agent_client import AgentClient
-from ..services.job_tracker import JobTracker
+from ..services.job_tracker import JobTracker, InMemoryJobTracker
 from ..schemas.document_ocr_schemas import DocOCRReq, DocOCRResp
 
 
@@ -31,9 +31,28 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
     - 调用智能体平台（先 stub）
     """
     r = request.app.state.redis  # type: ignore[attr-defined]
-    if not r:
-        raise HTTPException(status_code=503, detail="redis_not_ready")
-    tracker = JobTracker(r)
+    tracker = JobTracker(r) if r else InMemoryJobTracker()
+
+    agent_cfg = (getattr(request.app.state, "agent_configs", {}) or {}).get("doc-ocr", {})
+    if not isinstance(agent_cfg, dict):
+        agent_cfg = {}
+
+    def _cfg(*keys: str) -> str:
+        for k in keys:
+            v = agent_cfg.get(k)
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    client = AgentClient(
+        base_url=_cfg("base_url", "host"),
+        conversation_url=_cfg("conversation_url"),
+        upload_url=_cfg("upload_url"),
+        run_url=_cfg("run_url"),
+        authorization=_cfg("authorization", "private_key", "secret"),
+        app_id=_cfg("app_id", "appId"),
+        department_id=_cfg("department_id", "departmentId"),
+    )
 
     request_id = tracker.ensure_request_id(req.request_id)
     trace_id = request.headers.get("X-Trace-Id")
@@ -70,10 +89,20 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
             timeout=120.0,
         )
 
-        # 5) 调用智能体平台（一期 stub）
-        # TODO: 我们需要切换成AB智能体的调用方式(利用appid, private还有departmentid)
-        client = AgentClient(base_url="")  # 后续接真实平台时从 env/config 注入 base_url
-        agent_res = await client.run_doc_ocr(local_file_path=staged.local_path, options=req.options)
+        # 5) 调用智能体平台（可配置实调用）
+        use_real = agent_cfg.get("use_real", False) or bool(
+            agent_cfg.get("base_url")
+            or agent_cfg.get("host")
+            or agent_cfg.get("conversation_url")
+            or agent_cfg.get("upload_url")
+            or agent_cfg.get("run_url")
+            or agent_cfg.get("app_id")
+            or agent_cfg.get("appId")
+        )
+        if use_real:
+            agent_res = await client.run_doc_ocr_real(local_file_path=staged.local_path, options=req.options)
+        else:
+            agent_res = await client.run_doc_ocr(local_file_path=staged.local_path, options=req.options)
 
         if not agent_res.ok:
             tracker.set_status(

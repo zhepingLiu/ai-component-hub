@@ -138,8 +138,8 @@ async def proxy(category: str, action: str, request: Request):
                 "event": "routes.miss",
                 "category": category,
                 "action": action,
-                "trace_id": request.headers.get("X-Trace-Id"),
-                "request_id": request.headers.get("X-Request-Id"),
+                "trace_id": getattr(request.state, "trace_id", None),
+                "request_id": getattr(request.state, "request_id", None),
             }
         )
         raise HTTPException(status_code=404, detail="component_not_found")
@@ -163,9 +163,9 @@ async def proxy(category: str, action: str, request: Request):
     for h in HOP_BY_HOP:
         headers.pop(h, None)
         
-    # 透传 Trace-ID
-    headers.setdefault("X-Trace-Id", request.headers.get("X-Trace-Id", ""))
-    headers.setdefault("X-Request-Id", request.headers.get("X-Request-Id", ""))
+    # 透传 Trace-ID/Request-ID
+    headers.setdefault("X-Trace-Id", getattr(request.state, "trace_id", ""))
+    headers.setdefault("X-Request-Id", getattr(request.state, "request_id", ""))
 
     # GET/POST 支持：GET 透传 query，POST 透传 json
     params = dict(request.query_params)
@@ -202,6 +202,8 @@ async def proxy(category: str, action: str, request: Request):
         data = resp.json()
     except Exception:
         data = {"raw": resp.text}
+    if not isinstance(data, (dict, list)):
+        data = {"value": data}
 
     return JSONResponse(
         StdResp(

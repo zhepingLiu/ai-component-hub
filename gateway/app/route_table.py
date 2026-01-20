@@ -75,7 +75,25 @@ class RouteTable:
     # 🔍 resolve(): 根据 category + action 得到 URL
     # ------------------------------------------------------------------
     def resolve(self, category: str, action: str) -> str | None:
-        return self._routes.get(f"{category}.{action}")
+        key = f"{category}.{action}"
+        value = self._routes.get(key)
+        if value:
+            return value
+        try:
+            value = self.r.hget(self.redis_key, key)
+        except Exception as exc:
+            logger.exception(
+                {
+                    "event": "routes.resolve_failed",
+                    "redis_key": self.redis_key,
+                    "key": key,
+                    "error": str(exc),
+                }
+            )
+            return None
+        if value:
+            self._routes[key] = value
+        return value
 
     # ------------------------------------------------------------------
     # ⬅️ __setitem__(): 支持 route_table["tools.add"] = url

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import logging
 from fastapi import FastAPI
 
 from .health import router as health_router
 from .redis_client import create_redis_client
-from .route_table import YamlRouteTable
+from .agent_registry import load_agent_configs
 from .logging_utils import setup_logging
 from .config import settings
 
@@ -21,28 +22,44 @@ setup_logging(
 )
 logger = logging.getLogger("orchestrator")
 
+async def _init_redis_once(app: FastAPI, timeout_sec: float = 2.0) -> bool:
+    if app.state.redis:
+        return True
+    async with app.state.redis_lock:
+        if app.state.redis:
+            return True
+        try:
+            r = await asyncio.wait_for(
+                asyncio.to_thread(create_redis_client),
+                timeout=timeout_sec,
+            )
+            await asyncio.wait_for(asyncio.to_thread(r.ping), timeout=timeout_sec)
+            app.state.redis = r
+            logger.info({"event": "redis.ping.ok"})
+            return True
+        except asyncio.TimeoutError:
+            logger.warning({"event": "redis.init_timeout", "timeout_sec": timeout_sec})
+            app.state.redis = None
+            return False
+        except Exception as exc:
+            logger.exception({"event": "redis.init_failed", "error": str(exc)})
+            app.state.redis = None
+            return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = None
-    app.state.routes = None
+    app.state.redis_lock = asyncio.Lock()
+    app.state.agent_configs = {}
 
-    if settings.ROUTE_SOURCE.lower() == "yaml":
-        try:
-            app.state.routes = YamlRouteTable(settings.ROUTE_FILE)
-            logger.info({"event": "routes.yaml.loaded", "route_file": settings.ROUTE_FILE})
-        except Exception as exc:
-            logger.exception({"event": "routes.yaml.load_failed", "error": str(exc)})
+    app.state.agent_configs = load_agent_configs(settings.AGENT_CONFIG_FILE)
+    if app.state.agent_configs:
+        logger.info({"event": "agents.config_loaded", "count": len(app.state.agent_configs)})
 
     if settings.REDIS_REQUIRED:
-        # 初始化 Redis（无状态服务的外部依赖）
-        r = create_redis_client()
-
-        # 强制连通性检查：如果 Redis 不可用，直接让服务启动失败
-        # 这样上线时不会出现“跑起来了但执行不了”的半死状态
-        r.ping()
-        logger.info({"event": "redis.ping.ok"})
-
-        app.state.redis = r
+        # 后台初始化，避免启动被 Redis 阻塞
+        asyncio.create_task(_init_redis_once(app))
     else:
         logger.warning({"event": "redis.disabled"})
     try:

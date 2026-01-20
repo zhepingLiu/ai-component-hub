@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from ..config import settings
 from ..redis_client import get_redis
-from ..route_table import RouteTable, YamlRouteTable
+from ..route_table import RouteTable
 from ..schemas.route_schemas import RouteEntry, StdResp
 
 
@@ -19,25 +19,35 @@ logger = logging.getLogger("orchestrator")
 
 @router.post("/register")
 def register(ep: RouteEntry, request: Request):
-    if settings.ROUTE_SOURCE.lower() == "yaml":
-        table = request.app.state.routes or YamlRouteTable(settings.ROUTE_FILE)
-        request.app.state.routes = table
-    else:
-        table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
+    table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
     key = f"{ep.category}.{ep.action}"
     table.add(key, ep.url)
     logger.info({"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url})
     return {"code": 0, "msg": "ok"}
 
 
+def _resolve_agent_target(request: Request, name: str) -> tuple[str | None, dict, dict]:
+    configs = getattr(request.app.state, "agent_configs", {}) or {}
+    cfg = configs.get(name) if isinstance(configs, dict) else None
+
+    if cfg:
+        url = cfg.get("url")
+        if not url:
+            base = cfg.get("base_url") or cfg.get("host")
+            path = cfg.get("path", "")
+            if base:
+                url = str(base).rstrip("/") + "/" + str(path).lstrip("/")
+        query = cfg.get("query", {}) or {}
+        headers = cfg.get("headers", {}) or {}
+        return url, dict(query), dict(headers)
+
+    table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
+    return table.resolve("agents", name), {}, {}
+
+
 @router.api_route("/api/agents/{name}", methods=["GET", "POST"])
 async def proxy_agent(name: str, request: Request):
-    if settings.ROUTE_SOURCE.lower() == "yaml":
-        table = request.app.state.routes or YamlRouteTable(settings.ROUTE_FILE)
-        request.app.state.routes = table
-    else:
-        table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
-    target = table.resolve("agents", name)
+    target, extra_query, extra_headers = _resolve_agent_target(request, name)
     if not target:
         logger.warning(
             {
@@ -65,8 +75,10 @@ async def proxy_agent(name: str, request: Request):
 
     headers.setdefault("X-Trace-Id", request.headers.get("X-Trace-Id", ""))
     headers.setdefault("X-Request-Id", request.headers.get("X-Request-Id", ""))
+    headers.update(extra_headers)
 
     params = dict(request.query_params)
+    params.update(extra_query)
     body = None
 
     if method == "POST":

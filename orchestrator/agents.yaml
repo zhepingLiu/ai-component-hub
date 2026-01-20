@@ -1,0 +1,12 @@
+agents:
+  doc-ocr:
+    base_url: http://agent-platform:7002
+    conversation_url: ""
+    upload_url: ""
+    run_url: ""
+    query:
+      app_id: "your_app_id"
+      department_id: "your_department_id"
+    headers:
+      X-Private-Key: "your_private_key"
+    use_real: true

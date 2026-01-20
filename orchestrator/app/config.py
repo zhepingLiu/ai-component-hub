@@ -16,10 +16,6 @@ class Settings(BaseSettings):
     # Namespace（避免不同系统/环境 key 冲突）
     REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "aihub:orchestrator")
 
-    # Routes
-    ROUTE_SOURCE: str = os.getenv("ROUTE_SOURCE", "redis")
-    ROUTE_FILE: str = os.getenv("ROUTE_FILE", "/app/routes.yaml")
-
     # 任务/幂等相关默认 TTL（秒）
     IDEMPOTENCY_TTL_SEC: int = int(os.getenv("IDEMPOTENCY_TTL_SEC", "3600"))  # 1h
     JOB_TTL_SEC: int = int(os.getenv("JOB_TTL_SEC", "86400"))  # 24h
@@ -37,6 +33,9 @@ class Settings(BaseSettings):
 
     # Agent proxy
     REQUEST_TIMEOUT_SEC: float = float(os.getenv("REQUEST_TIMEOUT_SEC", "15.0"))
+
+    # Agent config
+    AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")
 
 
 settings = Settings()
