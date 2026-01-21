@@ -40,5 +40,10 @@ class Settings(BaseSettings):
     # Agent config
     AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")
 
+    # Gateway registration
+    GATEWAY_URL: str = os.getenv("GATEWAY_URL", "http://gateway:8000")
+    GW_API_KEY: str | None = os.getenv("GW_API_KEY") or None
+    ORCHESTRATOR_BASE_URL: str = os.getenv("ORCHESTRATOR_BASE_URL", "http://orchestrator:7010")
+
 
 settings = Settings()

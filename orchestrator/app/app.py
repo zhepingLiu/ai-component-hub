@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import logging
 from fastapi import FastAPI
+import httpx
 
 from .health import router as health_router
 from .redis_client import create_redis_client
@@ -21,6 +22,57 @@ setup_logging(
     retention_days=settings.LOG_RETENTION_DAYS,
 )
 logger = logging.getLogger("orchestrator")
+
+REGISTER_RETRY_SECONDS = 2
+REGISTER_MAX_ATTEMPTS = 15
+
+async def register_to_gateway():
+    endpoints = [
+        {
+            "category": "agents",
+            "action": "doc-ocr-run",
+            "url": f"{settings.ORCHESTRATOR_BASE_URL}/agents/doc-ocr/run",
+        },
+    ]
+    headers = {"X-Api-Key": settings.GW_API_KEY} if settings.GW_API_KEY else {}
+
+    async with httpx.AsyncClient() as client:
+        for ep in endpoints:
+            ok = False
+            for attempt in range(1, REGISTER_MAX_ATTEMPTS + 1):
+                try:
+                    resp = await client.post(
+                        f"{settings.GATEWAY_URL}/register",
+                        json=ep,
+                        headers=headers,
+                        timeout=5,
+                    )
+                    if resp.status_code == 200:
+                        ok = True
+                        logger.info(
+                            {"event": "gateway.registered", "action": ep["action"], "status": resp.status_code}
+                        )
+                        break
+                    logger.warning(
+                        {
+                            "event": "gateway.register.failed",
+                            "action": ep["action"],
+                            "status": resp.status_code,
+                            "attempt": attempt,
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(
+                        {
+                            "event": "gateway.register.error",
+                            "action": ep["action"],
+                            "attempt": attempt,
+                            "error": str(e),
+                        }
+                    )
+                await asyncio.sleep(REGISTER_RETRY_SECONDS)
+            if not ok:
+                logger.error({"event": "gateway.register.giveup", "action": ep["action"]})
 
 async def _init_redis_once(app: FastAPI, timeout_sec: float = 2.0) -> bool:
     if app.state.redis:
@@ -56,6 +108,8 @@ async def lifespan(app: FastAPI):
     app.state.agent_configs = load_agent_configs(settings.AGENT_CONFIG_FILE)
     if app.state.agent_configs:
         logger.info({"event": "agents.config_loaded", "count": len(app.state.agent_configs)})
+
+    await register_to_gateway()
 
     if settings.REDIS_REQUIRED:
         # 后台初始化，避免启动被 Redis 阻塞
