@@ -2,19 +2,25 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FileRef(BaseModel):
-    # 你们文件服务器是 HTTP 下载；这里用“完整URL”最简单
     url: str = Field(..., description="HTTP file url on file server")
     filename: Optional[str] = Field(None, description="Optional local filename for staging")
 
 
 class DocOCRReq(BaseModel):
     request_id: Optional[str] = Field(None, description="Idempotency key. If absent, server will generate one.")
-    file: FileRef
+    file: Optional[FileRef] = None
+    files: list[FileRef] = Field(default_factory=list)
     options: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _ensure_files(self) -> "DocOCRReq":
+        if not self.file and not self.files:
+            raise ValueError("Either 'file' or 'files' must be provided")
+        return self
 
 
 class DocOCRResp(BaseModel):

@@ -8,12 +8,12 @@ import httpx
 
 from .health import router as health_router
 from .redis_client import create_redis_client
-from .agent_registry import load_agent_configs
+from .agent_registry import build_gateway_entries, load_agent_configs
 from .logging_utils import setup_logging
 from .config import settings
 
-from .routers.document_ocr import router as doc_ocr_router
 from .routers.agent_gateway import router as agent_gateway_router
+from .routers.agent_runner import router as agent_runner_router
 
 setup_logging(
     service_name="orchestrator",
@@ -23,23 +23,19 @@ setup_logging(
 )
 logger = logging.getLogger("orchestrator")
 
-REGISTER_RETRY_SECONDS = 2
-REGISTER_MAX_ATTEMPTS = 15
-
 async def register_to_gateway():
-    endpoints = [
-        {
-            "category": "agents",
-            "action": "doc-ocr-run",
-            "url": f"{settings.ORCHESTRATOR_BASE_URL}/agents/doc-ocr/run",
-        },
-    ]
+    agent_configs = load_agent_configs(settings.AGENT_CONFIG_FILE)
+    endpoints = build_gateway_entries(
+        agents=agent_configs,
+        base_url=settings.ORCHESTRATOR_BASE_URL,
+        category=settings.GATEWAY_CATEGORY,
+    )
     headers = {"X-Api-Key": settings.GW_API_KEY} if settings.GW_API_KEY else {}
 
     async with httpx.AsyncClient() as client:
         for ep in endpoints:
             ok = False
-            for attempt in range(1, REGISTER_MAX_ATTEMPTS + 1):
+            for attempt in range(1, settings.REGISTER_MAX_ATTEMPTS + 1):
                 try:
                     resp = await client.post(
                         f"{settings.GATEWAY_URL}/register",
@@ -70,7 +66,7 @@ async def register_to_gateway():
                             "error": str(e),
                         }
                     )
-                await asyncio.sleep(REGISTER_RETRY_SECONDS)
+                await asyncio.sleep(settings.REGISTER_RETRY_SECONDS)
             if not ok:
                 logger.error({"event": "gateway.register.giveup", "action": ep["action"]})
 
@@ -136,9 +132,9 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, tags=["health"])
     app.include_router(agent_gateway_router, tags=["agents"])
+    app.include_router(agent_runner_router, tags=["agents"])
 
     return app
 
 
 app = create_app()
-app.include_router(doc_ocr_router, prefix="/agents", tags=["agents"])

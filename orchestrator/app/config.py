@@ -36,6 +36,8 @@ class Settings(BaseSettings):
 
     # Agent proxy
     REQUEST_TIMEOUT_SEC: float = float(os.getenv("REQUEST_TIMEOUT_SEC", "15.0"))
+    STAGING_DOWNLOAD_TIMEOUT_SEC: float = float(os.getenv("STAGING_DOWNLOAD_TIMEOUT_SEC", "120.0"))
+    ESB_UPLOAD_TIMEOUT_SEC: float = float(os.getenv("ESB_UPLOAD_TIMEOUT_SEC", "60.0"))
 
     # Agent config
     AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")
@@ -44,6 +46,9 @@ class Settings(BaseSettings):
     GATEWAY_URL: str = os.getenv("GATEWAY_URL", "http://gateway:8000")
     GW_API_KEY: str | None = os.getenv("GW_API_KEY") or None
     ORCHESTRATOR_BASE_URL: str = os.getenv("ORCHESTRATOR_BASE_URL", "http://orchestrator:7010")
+    GATEWAY_CATEGORY: str = os.getenv("GATEWAY_CATEGORY", "agents")
+    REGISTER_RETRY_SECONDS: int = int(os.getenv("REGISTER_RETRY_SECONDS", "2"))
+    REGISTER_MAX_ATTEMPTS: int = int(os.getenv("REGISTER_MAX_ATTEMPTS", "15"))
 
 
 settings = Settings()

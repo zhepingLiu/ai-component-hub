@@ -1,5 +1,8 @@
 agents:
   doc-ocr:
+    handler: doc_ocr
+    gateway_action: doc-ocr
+    enable_register: true
     base_url: http://agent-platform:7002
     conversation_url: ""
     upload_url: ""

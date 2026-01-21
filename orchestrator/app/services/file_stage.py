@@ -41,10 +41,7 @@ async def download_to_staging(
     size = 0
     h = hashlib.sha256()
 
-    server_path, server_file = split_url_for_esb(url)
-    if server_path.endswith("/"):
-        server_path = server_path[: server_path.rfind("/")]
-    download_url = f"{server_path}{server_file}"
+    download_url = url or (settings.ESB_BASE_URL.rstrip("/") + "/SSC")
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         async with client.stream("GET", download_url) as resp:
@@ -99,8 +96,12 @@ async def upload_json_via_esb(
         raise RuntimeError(f"Local upload file missing: {local_file_path}")
 
     file_bytes = local_path.read_bytes()
-    server_path = server_path.rstrip("/")
-    upload_url = server_path if server_path.endswith("/upload") else f"{server_path}/upload"
+    upload_url = settings.ESB_BASE_URL.rstrip("/")
+    if not upload_url:
+        server_path = server_path.rstrip("/")
+        upload_url = server_path if server_path.endswith("/upload") else f"{server_path}/upload"
+    else:
+        upload_url = f"{upload_url}/upload.do"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         start_tm = int(time.time() * 1000)
