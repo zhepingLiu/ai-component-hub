@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -29,7 +29,7 @@ async def download_to_staging(
     timeout: float | None = 60.0,
 ) -> StagedFile:
     """
-    从 HTTP 文件服务器下载到 staging 目录（外部 volume 挂载路径）。
+    从 HTTP 文件服务器下载到 staging 目录（容器内可写路径）。
     - 采用流式下载，避免大文件读入内存
     - 计算 sha256 便于审计/排障
     """
@@ -42,19 +42,15 @@ async def download_to_staging(
     h = hashlib.sha256()
 
     server_path, server_file = split_url_for_esb(url)
-    esb_endpoint = settings.ESB_BASE_URL.rstrip("/") + "/esb-download"
-    payload = {
-        "server_path": server_path,
-        "server_file": server_file,
-        # 让 ESB 以流方式返回内容，由 orchestrator 写入 staging
-        "local_file_path": None,
-    }
+    if server_path.endswith("/"):
+        server_path = server_path[: server_path.rfind("/")]
+    download_url = f"{server_path}{server_file}"
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        async with client.stream("POST", esb_endpoint, json=payload) as resp:
+        async with client.stream("GET", download_url) as resp:
             resp.raise_for_status()
             with dst.open("wb") as f:
-                async for chunk in resp.aiter_bytes():
+                async for chunk in resp.aiter_bytes(chunk_size=1024):
                     if not chunk:
                         continue
                     f.write(chunk)
@@ -92,24 +88,36 @@ async def upload_json_via_esb(
     timeout: float | None = 60.0,
 ) -> None:
     """
-    将 JSON 内容写入本地临时文件后，通过 ESB 服务上传到文件服务器。
-    说明：ESB 的 /esb-upload 接口要求容器内存在待上传文件。
+    读取本地文件后，通过文件服务器接口上传。
+    说明：按现有文件服务器要求拼 multipart，并包含 Pragma 头。
     """
-    esb_endpoint = settings.ESB_BASE_URL.rstrip("/") + "/esb-upload"
+    if not local_file_path:
+        raise RuntimeError("Upload requires local_file_path")
 
-    # 在指定路径写入文件（需确保 ESB 容器可访问该路径，建议挂载共享卷）
-    tmp_file = Path(local_file_path) if local_file_path else Path("/tmp/esb_uploads") / server_file
-    tmp_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    local_path = Path(local_file_path)
+    if not local_path.exists():
+        raise RuntimeError(f"Local upload file missing: {local_file_path}")
 
-    body = {
-        "server_path": server_path,
-        "server_file": server_file,
-        "local_file_path": str(tmp_file),
-    }
+    file_bytes = local_path.read_bytes()
+    server_path = server_path.rstrip("/")
+    upload_url = server_path if server_path.endswith("/upload") else f"{server_path}/upload"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(esb_endpoint, json=body)
+        start_tm = int(time.time() * 1000)
+        boundary = f"----------7dcd52d09f4{start_tm}----------"
+        prefix = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{settings.FILE_SERVER_APPSOURCE}"; '
+            f'filename="{server_file}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf8")
+        suffix = f"\r\n--{boundary}--\r\n".encode("utf8")
+        body = prefix + file_bytes + suffix
+        headers = {
+            "Pragma": "XMLMD5",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        resp = await client.post(upload_url, headers=headers, content=body)
         resp.raise_for_status()
         ok = False
         try:
@@ -117,4 +125,4 @@ async def upload_json_via_esb(
         except Exception:
             ok = False
         if not ok:
-            raise RuntimeError(f"ESB upload failed, response: {resp.text}")
+            raise RuntimeError(f"Upload failed, response: {resp.text}")

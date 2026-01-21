@@ -20,11 +20,14 @@ class Settings(BaseSettings):
     IDEMPOTENCY_TTL_SEC: int = int(os.getenv("IDEMPOTENCY_TTL_SEC", "3600"))  # 1h
     JOB_TTL_SEC: int = int(os.getenv("JOB_TTL_SEC", "86400"))  # 24h
 
-    # staging 目录（必须挂载外部卷）
+    # staging 目录（容器内可写路径）
     STAGING_DIR: str = os.getenv("STAGING_DIR", "/app/data/staging")
 
     # ESB service base URL（同 docker-compose 内服务名）
     ESB_BASE_URL: str = os.getenv("ESB_BASE_URL", "http://esb:7002")
+
+    # 文件服务器上传 appSource 字段
+    FILE_SERVER_APPSOURCE: str = os.getenv("FILE_SERVER_APPSOURCE", "CQRCB_ESBFILE_SOURCE")
 
     # Logging
     LOG_DIR: str = os.getenv("LOG_DIR", "/app/data/logs")

@@ -27,7 +27,7 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
     最小可上线版本：
     - 生成/使用 request_id（幂等）
     - Redis 记录 job 状态与结果（无状态）
-    - 下载文件到外部 volume staging（流式）
+    - 下载文件到本地 staging（流式）
     - 调用智能体平台（先 stub）
     """
     r = request.app.state.redis  # type: ignore[attr-defined]
@@ -79,7 +79,7 @@ async def run_doc_ocr(req: DocOCRReq, request: Request):
         tracker.set_status(request_id, status="RUNNING", result=None, error=None, ttl=settings.JOB_TTL_SEC)
         logger.info({"event": "doc_ocr.running", "request_id": request_id, "trace_id": trace_id})
 
-        # 4) 下载文件到 staging（外部卷路径）
+        # 4) 下载文件到 staging（本地路径）
         filename = req.file.filename or "input.bin"
         staged = await download_to_staging(
             request_id=request_id,

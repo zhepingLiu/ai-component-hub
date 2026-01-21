@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import AsyncIterator
 
 import httpx
@@ -92,17 +93,16 @@ async def esb_download(req: DownloadReq):
         logger.warning({"event": "esb.download.invalid", "server_path": server_path, "server_file": server_file})
         return JSONResponse(content=False, status_code=400)
 
-    # 拼接 URL
-    server_path = server_path.rstrip("/")
-    server_file = server_file.lstrip("/")
-    url = f"{server_path}/{server_file}"
+    if server_path.endswith("/"):
+        server_path = server_path[: server_path.rfind("/")]
+    url = f"{server_path}{server_file}"
 
     async def _stream() -> AsyncIterator[bytes]:
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 async with client.stream("GET", url) as resp:
                     resp.raise_for_status()
-                    async for chunk in resp.aiter_bytes():
+                    async for chunk in resp.aiter_bytes(chunk_size=1024):
                         if chunk:
                             yield chunk
         except Exception as e:
@@ -167,17 +167,27 @@ async def esb_upload(req: UploadReq):
         logger.error({"event": "esb.upload.read_failed", "local_file_path": local_file_path, "error": str(e)})
         return JSONResponse(content=False)
 
-    # ESB 上传地址
-    server_path = server_path.rstrip("/")
-    url = f"{server_path}/upload"
+    if server_path.endswith("/"):
+        server_path = server_path[: server_path.rfind("/")]
+    url = server_path
 
-    files = {
-        "file": (server_file, file_bytes, "application/octet-stream")
+    start_tm = int(time.time() * 1000)
+    boundary = f"----------7dcd52d09f4{start_tm}----------"
+    prefix = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{APPSOURCE}"; filename="{server_file}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode("utf8")
+    suffix = f"\r\n--{boundary}--\r\n".encode("utf8")
+    body = prefix + file_bytes + suffix
+    headers = {
+        "Pragma": "XMLMD5",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
     }
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(url, files=files)
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(url, headers=headers, content=body)
             resp.raise_for_status()
     except Exception as e:
         logger.error({"event": "esb.upload.failed", "url": url, "error": str(e)})
