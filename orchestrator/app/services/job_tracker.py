@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from ..config import settings
+
+logger = logging.getLogger("orchestrator.job_tracker")
 
 
 class JobTracker:
@@ -24,12 +27,14 @@ class JobTracker:
 
     def get_job(self, request_id: str) -> tuple[str, dict[str, Any] | None]:
         job_key = self._key("job", request_id)
+        logger.debug({"event": "job_tracker.get_job", "request_id": request_id, "key": job_key})
         raw = self.r.get(job_key)
         return job_key, json.loads(raw) if raw else None
 
     def acquire_lock(self, request_id: str, ttl: int) -> tuple[str | None, str]:
         lock_key = self._key("lock", request_id)
         token = str(uuid.uuid4())
+        logger.debug({"event": "job_tracker.acquire_lock", "request_id": request_id, "key": lock_key, "ttl": ttl})
         got_lock = self.r.set(lock_key, token, nx=True, ex=ttl)
         return (token if got_lock else None), lock_key
 
@@ -45,6 +50,7 @@ class JobTracker:
     def set_status(self, request_id: str, status: str, *, result: Any = None, error: str | None = None, ttl: int = 0) -> tuple[str, dict[str, Any]]:
         job_key = self._key("job", request_id)
         payload = {"status": status, "result": result, "error": error}
+        logger.debug({"event": "job_tracker.set_status", "request_id": request_id, "key": job_key, "status": status, "ttl": ttl})
         self.r.set(job_key, json.dumps(payload), ex=ttl or None)
         return job_key, payload
 

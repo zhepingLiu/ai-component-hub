@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict
 
 import httpx
 
 from ...schemas.common import AgentResult
+
+logger = logging.getLogger("orchestrator.doc_ocr.client")
 
 
 class DocOCRClient:
@@ -81,6 +84,16 @@ class DocOCRClient:
         conversation_url = self.conversation_url or f"{self.base_url}/v2/app/conversation"
         upload_url = self.upload_url or f"{self.base_url}/v2/app/conversation/file/upload"
         run_url = self.run_url or f"{self.base_url}/v2/app/conversation/runs"
+        logger.info(
+            {
+                "event": "doc_ocr_real.config",
+                "conversation_url": conversation_url,
+                "upload_url": upload_url,
+                "run_url": run_url,
+                "has_authorization": bool(self.authorization),
+                "has_app_id": bool(self.app_id),
+            }
+        )
 
         if not conversation_url or not upload_url or not run_url:
             return AgentResult(ok=False, data={}, error="Agent URLs are not configured")
@@ -106,21 +119,23 @@ class DocOCRClient:
                 conv_id = conv_resp.json().get("conversation_id")
                 if not conv_id:
                     return AgentResult(ok=False, data={}, error="Missing conversation_id in response")
+                logger.info({"event": "doc_ocr_real.conversation_ok", "conversation_id": conv_id})
 
                 # 2) 上传文件
                 with open(local_file_path, "rb") as f:
-                    files = {"file": (Path(local_file_path).name, f)}
+                    files = {"file": f}
                     form_data: Dict[str, Any] = {
-                        "app_id": self.app_id,
-                        "conversation_id": conv_id,
+                        "app_id": str(self.app_id),
+                        "conversation_id": str(conv_id),
                     }
                     if self.department_id:
-                        form_data["department_id"] = self.department_id
+                        form_data["department_id"] = str(self.department_id)
                     upload_resp = await client.post(upload_url, headers=headers_auth, data=form_data, files=files)
                 upload_resp.raise_for_status()
                 file_id = upload_resp.json().get("id")
                 if not file_id:
                     return AgentResult(ok=False, data={}, error="Missing file id in upload response")
+                logger.info({"event": "doc_ocr_real.upload_ok", "file_id": file_id})
 
                 # 3) 触发运行
                 run_payload: Dict[str, Any] = {
@@ -138,8 +153,10 @@ class DocOCRClient:
                     data = run_resp.json()
                 except ValueError:
                     data = {"raw": run_resp.text}
+                logger.info({"event": "doc_ocr_real.run_ok"})
                 return AgentResult(ok=True, data=data)
         except Exception as e:
+            logger.exception({"event": "doc_ocr_real.failed", "error": str(e)})
             return AgentResult(ok=False, data={}, error=str(e))
 
     async def run_doc_ocr_real_many(self, *, local_file_paths: list[str], options: Dict[str, Any]) -> AgentResult:
@@ -150,6 +167,17 @@ class DocOCRClient:
         conversation_url = self.conversation_url or f"{self.base_url}/v2/app/conversation"
         upload_url = self.upload_url or f"{self.base_url}/v2/app/conversation/file/upload"
         run_url = self.run_url or f"{self.base_url}/v2/app/conversation/runs"
+        logger.info(
+            {
+                "event": "doc_ocr_real_many.config",
+                "conversation_url": conversation_url,
+                "upload_url": upload_url,
+                "run_url": run_url,
+                "has_authorization": bool(self.authorization),
+                "has_app_id": bool(self.app_id),
+                "file_count": len(local_file_paths or []),
+            }
+        )
 
         if not conversation_url or not upload_url or not run_url:
             return AgentResult(ok=False, data={}, error="Agent URLs are not configured")
@@ -176,23 +204,25 @@ class DocOCRClient:
                 conv_id = conv_resp.json().get("conversation_id")
                 if not conv_id:
                     return AgentResult(ok=False, data={}, error="Missing conversation_id in response")
+                logger.info({"event": "doc_ocr_real_many.conversation_ok", "conversation_id": conv_id})
 
                 file_ids: list[str] = []
                 for local_file_path in local_file_paths:
                     with open(local_file_path, "rb") as f:
-                        files = {"file": (Path(local_file_path).name, f)}
+                        files = {"file": f}
                         form_data: Dict[str, Any] = {
-                            "app_id": self.app_id,
-                            "conversation_id": conv_id,
+                            "app_id": str(self.app_id),
+                            "conversation_id": str(conv_id),
                         }
                         if self.department_id:
-                            form_data["department_id"] = self.department_id
+                            form_data["department_id"] = str(self.department_id)
                         upload_resp = await client.post(upload_url, headers=headers_auth, data=form_data, files=files)
                     upload_resp.raise_for_status()
                     file_id = upload_resp.json().get("id")
                     if not file_id:
                         return AgentResult(ok=False, data={}, error="Missing file id in upload response")
                     file_ids.append(file_id)
+                    logger.info({"event": "doc_ocr_real_many.upload_ok", "file_id": file_id})
 
                 run_payload: Dict[str, Any] = {
                     "app_id": self.app_id,
@@ -209,6 +239,8 @@ class DocOCRClient:
                     data = run_resp.json()
                 except ValueError:
                     data = {"raw": run_resp.text}
+                logger.info({"event": "doc_ocr_real_many.run_ok"})
                 return AgentResult(ok=True, data=data)
         except Exception as e:
+            logger.exception({"event": "doc_ocr_real_many.failed", "error": str(e)})
             return AgentResult(ok=False, data={}, error=str(e))

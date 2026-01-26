@@ -52,6 +52,7 @@ async def run(ctx: AgentContext):
 
     logger.info({"event": "doc_ocr.received", "request_id": request_id, "trace_id": trace_id})
 
+    logger.info({"event": "doc_ocr.check_existing", "request_id": request_id})
     _, existing = tracker.get_job(request_id)
     if existing:
         return DocOCRResp(
@@ -61,8 +62,12 @@ async def run(ctx: AgentContext):
             error=existing.get("error"),
         )
 
+    logger.info(
+        {"event": "doc_ocr.acquire_lock", "request_id": request_id, "ttl": cfg.IDEMPOTENCY_TTL_SEC}
+    )
     token, _ = tracker.acquire_lock(request_id, ttl=cfg.IDEMPOTENCY_TTL_SEC)
     if not token:
+        logger.info({"event": "doc_ocr.lock_busy", "request_id": request_id})
         return DocOCRResp(request_id=request_id, status="RUNNING")
 
     try:
@@ -86,12 +91,42 @@ async def run(ctx: AgentContext):
                 filename = f"{stem}-{idx + 1}{suffix}"
             used_filenames.add(filename)
 
-            staged = await download_to_staging(
-                request_id=request_id,
-                url=file_ref.url,
-                staging_dir=cfg.STAGING_DIR,
-                filename=filename,
-                timeout=cfg.STAGING_DOWNLOAD_TIMEOUT_SEC,
+            logger.info(
+                {
+                    "event": "doc_ocr.download_start",
+                    "request_id": request_id,
+                    "idx": idx,
+                    "url": file_ref.url,
+                    "filename": filename,
+                }
+            )
+            try:
+                staged = await download_to_staging(
+                    request_id=request_id,
+                    url=file_ref.url,
+                    staging_dir=cfg.STAGING_DIR,
+                    filename=filename,
+                    timeout=cfg.STAGING_DOWNLOAD_TIMEOUT_SEC,
+                )
+            except Exception as e:
+                logger.error(
+                    {
+                        "event": "doc_ocr.download_failed",
+                        "request_id": request_id,
+                        "idx": idx,
+                        "url": file_ref.url,
+                        "error": str(e),
+                    }
+                )
+                raise HTTPException(status_code=502, detail="download_failed")
+            logger.info(
+                {
+                    "event": "doc_ocr.download_done",
+                    "request_id": request_id,
+                    "idx": idx,
+                    "local_path": staged.local_path,
+                    "size_bytes": staged.size_bytes,
+                }
             )
             staged_files.append(staged)
 
