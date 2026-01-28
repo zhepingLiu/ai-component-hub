@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 
 from ..config import settings
 
+logger = logging.getLogger("orchestrator.file_stage")
 
 @dataclass
 class StagedFile:
@@ -120,10 +122,14 @@ async def upload_json_via_esb(
         }
         resp = await client.post(upload_url, headers=headers, content=body)
         resp.raise_for_status()
-        ok = False
-        try:
-            ok = bool(resp.json())
-        except Exception:
-            ok = False
+        logger.info(
+            {
+                "event": "file_stage.upload_response",
+                "status_code": resp.status_code,
+                "content_type": resp.headers.get("content-type"),
+                "text": resp.text[:500],
+            }
+        )
+        ok = 200 <= resp.status_code < 300
         if not ok:
             raise RuntimeError(f"Upload failed, response: {resp.text}")

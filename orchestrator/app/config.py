@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT_SEC: float = float(os.getenv("REQUEST_TIMEOUT_SEC", "15.0"))
     STAGING_DOWNLOAD_TIMEOUT_SEC: float = float(os.getenv("STAGING_DOWNLOAD_TIMEOUT_SEC", "120.0"))
     ESB_UPLOAD_TIMEOUT_SEC: float = float(os.getenv("ESB_UPLOAD_TIMEOUT_SEC", "60.0"))
+    DOC_OCR_CALLBACK_URL: str = os.getenv("DOC_OCR_CALLBACK_URL", "")
+    DOC_OCR_CALLBACK_TIMEOUT_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_TIMEOUT_SEC", "10.0"))
+    DOC_OCR_CALLBACK_MAX_RETRIES: int = int(os.getenv("DOC_OCR_CALLBACK_MAX_RETRIES", "5"))
+    DOC_OCR_CALLBACK_BASE_DELAY_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_BASE_DELAY_SEC", "1.0"))
 
     # Agent config
     AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")
