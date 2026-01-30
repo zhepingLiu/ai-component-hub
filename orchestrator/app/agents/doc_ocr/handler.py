@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import httpx
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from ...services.agent_runtime import AgentContext
+from ...services.callbacks import send_callback
 from ...services.file_stage import (
     download_to_staging,
     split_url_for_esb,
@@ -18,61 +18,6 @@ from ...services.file_stage import (
 )
 from .client import DocOCRClient
 from .schema import DocOCRReq, DocOCRResp
-
-
-async def _send_callback(
-    *,
-    callback_url: str,
-    payload: dict,
-    timeout: float,
-    max_retries: int,
-    base_delay: float,
-    logger,
-    request_id: str,
-    trace_id: str | None,
-) -> None:
-    if not callback_url:
-        logger.info({"event": "doc_ocr.callback.skip", "request_id": request_id, "trace_id": trace_id})
-        return
-
-    last_error: str | None = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(callback_url, json=payload)
-                resp.raise_for_status()
-            logger.info(
-                {
-                    "event": "doc_ocr.callback.ok",
-                    "request_id": request_id,
-                    "trace_id": trace_id,
-                    "attempt": attempt,
-                }
-            )
-            return
-        except Exception as exc:
-            last_error = str(exc)
-            logger.warning(
-                {
-                    "event": "doc_ocr.callback.failed",
-                    "request_id": request_id,
-                    "trace_id": trace_id,
-                    "attempt": attempt,
-                    "error": last_error,
-                }
-            )
-            if attempt < max_retries:
-                delay = base_delay * (2 ** (attempt - 1))
-                await asyncio.sleep(delay)
-
-    logger.error(
-        {
-            "event": "doc_ocr.callback.giveup",
-            "request_id": request_id,
-            "trace_id": trace_id,
-            "error": last_error,
-        }
-    )
 
 
 async def _process_doc_ocr(
@@ -102,15 +47,15 @@ async def _process_doc_ocr(
         logger.info({"event": "doc_ocr.running", "request_id": request_id, "trace_id": trace_id})
 
         file_refs = list(req.files)
-        if req.file:
-            file_refs.insert(0, req.file)
 
         used_filenames: set[str] = set()
         staged_files = []
         for idx, file_ref in enumerate(file_refs):
             filename = file_ref.filename
+            if filename:
+                filename = Path(filename).name
             if not filename:
-                parsed_name = Path(urlsplit(file_ref.url).path).name
+                parsed_name = Path(urlsplit(file_ref.url or "").path).name
                 filename = parsed_name or f"input-{idx + 1}.bin"
             if filename in used_filenames:
                 stem = Path(filename).stem or "input"
@@ -130,7 +75,7 @@ async def _process_doc_ocr(
             try:
                 staged = await download_to_staging(
                     request_id=request_id,
-                    url=file_ref.url,
+                    url=file_ref.url or "",
                     staging_dir=cfg.STAGING_DIR,
                     filename=filename,
                     timeout=cfg.STAGING_DOWNLOAD_TIMEOUT_SEC,
@@ -225,7 +170,10 @@ async def _process_doc_ocr(
 
         server_paths = []
         for file_ref in file_refs:
-            server_path, _ = split_url_for_esb(file_ref.url)
+            if file_ref.url:
+                server_path, _ = split_url_for_esb(file_ref.url)
+            else:
+                server_path = cfg.ESB_BASE_URL.rstrip("/")
             server_paths.append(server_path)
         primary_server_path = server_paths[0]
         if len(set(server_paths)) > 1:
@@ -237,7 +185,8 @@ async def _process_doc_ocr(
                     "server_paths": server_paths,
                 }
             )
-        upload_filename = f"{request_id}-result.json"
+        upload_subdir = "doc_ocr"
+        upload_filename = f"{upload_subdir}/{request_id}-result.json"
         upload_path = Path(cfg.STAGING_DIR) / request_id / upload_filename
         upload_path.parent.mkdir(parents=True, exist_ok=True)
         upload_path.write_text(json.dumps(agent_res.data, ensure_ascii=False), encoding="utf-8")
@@ -286,9 +235,16 @@ async def _process_doc_ocr(
         logger.exception({"event": "doc_ocr.unhandled_failed", "request_id": request_id, "error": error})
         status = "FAILED"
     finally:
-        await _send_callback(
+        result_flag = 1 if status == "SUCCEEDED" else 2
+        callback_payload = {
+            "BusinessSerlNo": request_id,
+            "ResultFlag": result_flag,
+            "FilePathAddr": result["esb_upload"]["server_file"] if status == "SUCCEEDED" and result else "",
+            "FailReason": error or "",
+        }
+        await send_callback(
             callback_url=callback_url,
-            payload={"request_id": request_id, "status": status, "result": result, "error": error},
+            payload=callback_payload,
             timeout=callback_timeout,
             max_retries=callback_max_retries,
             base_delay=callback_base_delay,

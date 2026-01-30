@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -73,7 +74,10 @@ async def proxy_agent(name: str, request: Request):
     for h in hop_by_hop:
         headers.pop(h, None)
 
-    headers.setdefault("X-Trace-Id", request.headers.get("X-Trace-Id", ""))
+    trace_id = request.headers.get("X-Trace-Id")
+    if not trace_id:
+        trace_id = str(uuid.uuid4())
+    headers.setdefault("X-Trace-Id", trace_id)
     headers.setdefault("X-Request-Id", request.headers.get("X-Request-Id", ""))
     headers.update(extra_headers)
 
