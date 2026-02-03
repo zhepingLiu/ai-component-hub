@@ -9,7 +9,10 @@ import httpx
 async def send_callback(
     *,
     callback_url: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+    body: str | None = None,
+    content_type: str | None = None,
+    headers: dict[str, str] | None = None,
     timeout: float,
     max_retries: int,
     base_delay: float,
@@ -25,7 +28,13 @@ async def send_callback(
     for attempt in range(1, max_retries + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(callback_url, json=payload)
+                send_headers = dict(headers or {})
+                if content_type:
+                    send_headers.setdefault("Content-Type", content_type)
+                if body is not None:
+                    resp = await client.post(callback_url, content=body, headers=send_headers)
+                else:
+                    resp = await client.post(callback_url, json=payload, headers=send_headers)
                 resp.raise_for_status()
             logger.info(
                 {
@@ -33,6 +42,7 @@ async def send_callback(
                     "request_id": request_id,
                     "trace_id": trace_id,
                     "attempt": attempt,
+                    "content_type": content_type or "application/json",
                 }
             )
             return

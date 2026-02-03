@@ -13,4 +13,5 @@ agents:
       department_id: "your_department_id"
     headers:
       X-Private-Key: "your_private_key"
+      channel: "your_channel"
     use_real: true

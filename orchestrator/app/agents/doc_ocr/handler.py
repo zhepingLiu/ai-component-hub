@@ -4,6 +4,9 @@ import asyncio
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
+from datetime import datetime
+from typing import Mapping
+from xml.etree import ElementTree as ET
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -18,6 +21,50 @@ from ...services.file_stage import (
 )
 from .client import DocOCRClient
 from .schema import DocOCRReq, DocOCRResp
+
+
+_REQUEST_HEADER_KEYS = [
+    "ChanlNo",
+    "ReqSeqNo",
+    "ReqTime",
+    "ReqDate",
+]
+
+_REQUEST_BODY_KEYS = [
+    "BusinessSerlNo",
+    "ResultFlag",
+    "FilePathAddr",
+    "FailReason",
+]
+
+
+def _xml_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _append_children(parent: ET.Element, keys: list[str], values: Mapping[str, object]) -> None:
+    for key in keys:
+        child = ET.SubElement(parent, key)
+        child.text = _xml_text(values.get(key, ""))
+
+
+def _build_doc_ocr_callback_xml(
+    *,
+    request_header: Mapping[str, object],
+    request_body: Mapping[str, object],
+) -> str:
+    ns = "http://schemas.xmlsoap.org/soap/envelope/"
+    ET.register_namespace("soapenv", ns)
+    envelope = ET.Element(f"{{{ns}}}Envelope")
+    body = ET.SubElement(envelope, f"{{{ns}}}Body")
+    req = ET.SubElement(body, "Request")
+    rh = ET.SubElement(req, "RequestHeader")
+    _append_children(rh, _REQUEST_HEADER_KEYS, request_header)
+    rb = ET.SubElement(req, "RequestBody")
+    _append_children(rb, _REQUEST_BODY_KEYS, request_body)
+    return ET.tostring(envelope, encoding="utf-8", xml_declaration=True).decode("utf-8")
 
 
 async def _process_doc_ocr(
@@ -236,15 +283,36 @@ async def _process_doc_ocr(
         status = "FAILED"
     finally:
         result_flag = 1 if status == "SUCCEEDED" else 2
+        raw_headers = agent_cfg.get("headers", {}) or {}
+        callback_headers = {
+            str(k): str(v) for k, v in raw_headers.items() if v is not None and v != ""
+        }
         callback_payload = {
             "BusinessSerlNo": request_id,
             "ResultFlag": result_flag,
             "FilePathAddr": result["esb_upload"]["server_file"] if status == "SUCCEEDED" and result else "",
             "FailReason": error or "",
         }
+        now = datetime.now()
+        channel_value = ""
+        if isinstance(raw_headers, dict):
+            channel_value = str(raw_headers.get("channel", "")).strip()
+        request_header = {
+            "ChanlNo": channel_value,
+            "ReqSeqNo": trace_id or request_id,
+            "ReqTime": now.strftime("%H%M%S"),
+            "ReqDate": now.strftime("%Y%m%d"),
+        }
+        callback_xml_body = _build_doc_ocr_callback_xml(
+            request_header=request_header,
+            request_body=callback_payload,
+        )
         await send_callback(
             callback_url=callback_url,
             payload=callback_payload,
+            body=callback_xml_body,
+            content_type="text/xml; charset=utf-8",
+            headers=callback_headers or None,
             timeout=callback_timeout,
             max_retries=callback_max_retries,
             base_delay=callback_base_delay,
