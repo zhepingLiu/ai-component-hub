@@ -56,7 +56,6 @@ async def proxy_agent(name: str, request: Request):
                 "category": "agents",
                 "action": name,
                 "trace_id": request.headers.get("X-Trace-Id"),
-                "request_id": request.headers.get("X-Request-Id"),
             }
         )
         raise HTTPException(status_code=404, detail="agent_not_found")
@@ -78,7 +77,7 @@ async def proxy_agent(name: str, request: Request):
     if not trace_id:
         trace_id = str(uuid.uuid4())
     headers.setdefault("X-Trace-Id", trace_id)
-    headers.setdefault("X-Request-Id", request.headers.get("X-Request-Id", ""))
+    headers.setdefault("Channel", request.headers.get("Channel", ""))
     headers.update(extra_headers)
 
     params = dict(request.query_params)

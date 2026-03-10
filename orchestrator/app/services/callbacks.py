@@ -19,10 +19,10 @@ async def send_callback(
     logger,
     request_id: str,
     trace_id: str | None,
-) -> None:
+) -> dict[str, Any]:
     if not callback_url:
         logger.info({"event": "callback.skip", "request_id": request_id, "trace_id": trace_id})
-        return
+        return {"status": "SKIPPED", "error": None, "attempts": 0}
 
     last_error: str | None = None
     for attempt in range(1, max_retries + 1):
@@ -45,7 +45,7 @@ async def send_callback(
                     "content_type": content_type or "application/json",
                 }
             )
-            return
+            return {"status": "OK", "error": None, "attempts": attempt}
         except Exception as exc:
             last_error = str(exc)
             logger.warning(
@@ -69,3 +69,4 @@ async def send_callback(
             "error": last_error,
         }
     )
+    return {"status": "FAILED", "error": last_error, "attempts": max_retries}

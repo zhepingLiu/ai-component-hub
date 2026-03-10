@@ -307,7 +307,7 @@ async def _process_doc_ocr(
             request_header=request_header,
             request_body=callback_payload,
         )
-        await send_callback(
+        callback_info = await send_callback(
             callback_url=callback_url,
             payload=callback_payload,
             body=callback_xml_body,
@@ -320,6 +320,15 @@ async def _process_doc_ocr(
             request_id=request_id,
             trace_id=trace_id,
         )
+        if status == "SUCCEEDED" and isinstance(result, dict):
+            result["callback"] = callback_info
+            tracker.set_status(
+                request_id,
+                status=status,
+                result=result,
+                error=error,
+                ttl=cfg.JOB_TTL_SEC,
+            )
         tracker.release_lock(request_id, token)
 
 

@@ -49,6 +49,11 @@ def setup_logging(service_name: str, log_dir: str, level: str, retention_days: i
 
     root.addHandler(file_handler)
     root.addHandler(stream_handler)
+
+    # Clamp common noisy loggers to the same level.
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(level.upper())
+
     _CONFIGURED = True
 
 
