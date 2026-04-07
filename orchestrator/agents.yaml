@@ -3,15 +3,4 @@ agents:
     handler: doc_ocr
     gateway_action: doc-ocr
     enable_register: true
-    base_url: http://agent-platform:7002
-    callback_url: ""
-    conversation_url: ""
-    upload_url: ""
-    run_url: ""
-    query:
-      app_id: "your_app_id"
-      department_id: "your_department_id"
-    headers:
-      X-Private-Key: "your_private_key"
-      channel: "your_channel"
-    use_real: true
+    use_real: false

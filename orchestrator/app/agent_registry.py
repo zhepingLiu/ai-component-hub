@@ -6,8 +6,58 @@ from typing import Any
 from importlib import import_module
 
 import yaml
+from .config import settings
 
 logger = logging.getLogger("orchestrator")
+
+
+def _apply_env_overrides(agents: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    result = {name: dict(cfg) for name, cfg in agents.items()}
+
+    doc_ocr = result.get("doc-ocr")
+    if not isinstance(doc_ocr, dict):
+        return result
+
+    query = doc_ocr.get("query")
+    query_map = dict(query) if isinstance(query, dict) else {}
+
+    headers = doc_ocr.get("headers")
+    headers_map = dict(headers) if isinstance(headers, dict) else {}
+
+    if settings.DOC_OCR_BASE_URL:
+        doc_ocr["base_url"] = settings.DOC_OCR_BASE_URL
+    if settings.DOC_OCR_CALLBACK_URL:
+        doc_ocr["callback_url"] = settings.DOC_OCR_CALLBACK_URL
+    if settings.DOC_OCR_CONVERSATION_URL:
+        doc_ocr["conversation_url"] = settings.DOC_OCR_CONVERSATION_URL
+    if settings.DOC_OCR_UPLOAD_URL:
+        doc_ocr["upload_url"] = settings.DOC_OCR_UPLOAD_URL
+    if settings.DOC_OCR_RUN_URL:
+        doc_ocr["run_url"] = settings.DOC_OCR_RUN_URL
+    if settings.DOC_OCR_APP_ID:
+        doc_ocr["app_id"] = settings.DOC_OCR_APP_ID
+        query_map["app_id"] = settings.DOC_OCR_APP_ID
+    if settings.DOC_OCR_DEPARTMENT_ID:
+        doc_ocr["department_id"] = settings.DOC_OCR_DEPARTMENT_ID
+        query_map["department_id"] = settings.DOC_OCR_DEPARTMENT_ID
+
+    authorization = settings.DOC_OCR_AUTHORIZATION or settings.DOC_OCR_PRIVATE_KEY
+    if authorization:
+        doc_ocr["authorization"] = authorization
+        headers_map["X-Private-Key"] = authorization
+
+    if settings.DOC_OCR_CHANNEL:
+        headers_map["channel"] = settings.DOC_OCR_CHANNEL
+
+    if settings.DOC_OCR_USE_REAL:
+        doc_ocr["use_real"] = True
+
+    if query_map:
+        doc_ocr["query"] = query_map
+    if headers_map:
+        doc_ocr["headers"] = headers_map
+
+    return result
 
 
 def load_agent_configs(path: str) -> dict[str, dict[str, Any]]:
@@ -24,7 +74,8 @@ def load_agent_configs(path: str) -> dict[str, dict[str, Any]]:
         logger.warning({"event": "agents.config_invalid", "path": str(config_path)})
         return {}
 
-    return {str(k): v for k, v in agents.items() if isinstance(v, dict)}
+    parsed = {str(k): v for k, v in agents.items() if isinstance(v, dict)}
+    return _apply_env_overrides(parsed)
 
 
 def normalize_handler_name(name: str) -> str:

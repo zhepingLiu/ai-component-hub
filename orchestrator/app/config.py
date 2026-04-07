@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     DOC_OCR_CALLBACK_TIMEOUT_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_TIMEOUT_SEC", "10.0"))
     DOC_OCR_CALLBACK_MAX_RETRIES: int = int(os.getenv("DOC_OCR_CALLBACK_MAX_RETRIES", "5"))
     DOC_OCR_CALLBACK_BASE_DELAY_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_BASE_DELAY_SEC", "1.0"))
+    DOC_OCR_BASE_URL: str = os.getenv("DOC_OCR_BASE_URL", "")
+    DOC_OCR_CONVERSATION_URL: str = os.getenv("DOC_OCR_CONVERSATION_URL", "")
+    DOC_OCR_UPLOAD_URL: str = os.getenv("DOC_OCR_UPLOAD_URL", "")
+    DOC_OCR_RUN_URL: str = os.getenv("DOC_OCR_RUN_URL", "")
+    DOC_OCR_APP_ID: str = os.getenv("DOC_OCR_APP_ID", "")
+    DOC_OCR_DEPARTMENT_ID: str = os.getenv("DOC_OCR_DEPARTMENT_ID", "")
+    DOC_OCR_AUTHORIZATION: str = os.getenv("DOC_OCR_AUTHORIZATION", "")
+    DOC_OCR_PRIVATE_KEY: str = os.getenv("DOC_OCR_PRIVATE_KEY", "")
+    DOC_OCR_CHANNEL: str = os.getenv("DOC_OCR_CHANNEL", "")
+    DOC_OCR_USE_REAL: bool = os.getenv("DOC_OCR_USE_REAL", "").lower() == "true"
 
     # Agent config
     AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")
