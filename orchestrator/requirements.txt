@@ -1,4 +1,5 @@
 fastapi
+gunicorn
 httpx
 uvicorn[standard]
 redis

@@ -58,6 +58,7 @@ services:
       - REDIS_PORT=6379
       - REDIS_KEY_PREFIX=aihub:orchestrator
       - STAGING_DIR=/app/data/staging
+      - WEB_CONCURRENCY=4
     volumes:
       - ./data/orchestrator:/app/data
     networks:

@@ -3,3 +3,4 @@ tests/*
 uv.lock
 data/
 *.jpg
+__pycache__/

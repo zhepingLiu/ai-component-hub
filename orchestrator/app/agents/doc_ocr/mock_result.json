@@ -1,0 +1,14 @@
+{
+  "agent": "doc-ocr-agent",
+  "mock": true,
+  "document_type": "invoice",
+  "confidence": 0.996,
+  "text": "This is a mock OCR result for load testing.",
+  "fields": {
+    "invoice_no": "INV-20260408-0001",
+    "invoice_date": "2026-04-08",
+    "seller": "Mock Supplier Ltd.",
+    "buyer": "Mock Buyer Ltd.",
+    "amount": "12345.67"
+  }
+}

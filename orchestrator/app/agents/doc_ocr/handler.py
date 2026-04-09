@@ -84,6 +84,7 @@ async def _process_doc_ocr(
     logger = ctx.logger
     cfg = ctx.settings
     agent_cfg = ctx.agent_config or {}
+    mock_enabled = bool(agent_cfg.get("mock_enabled", False))
 
     status = "FAILED"
     result = None
@@ -169,7 +170,12 @@ async def _process_doc_ocr(
             or agent_cfg.get("appId")
         )
         local_paths = [staged.local_path for staged in staged_files]
-        if use_real:
+        if mock_enabled:
+            if len(local_paths) == 1:
+                agent_res = await client.run_doc_ocr_mock(local_file_path=local_paths[0], options=req.options)
+            else:
+                agent_res = await client.run_doc_ocr_mock_many(local_file_paths=local_paths, options=req.options)
+        elif use_real:
             if len(local_paths) == 1:
                 agent_res = await client.run_doc_ocr_real(local_file_path=local_paths[0], options=req.options)
             else:
@@ -363,6 +369,7 @@ async def run(ctx: AgentContext):
         authorization=_cfg("authorization", "private_key", "secret"),
         app_id=_cfg("app_id", "appId"),
         department_id=_cfg("department_id", "departmentId"),
+        mock_result_path=_cfg("mock_result_file"),
     )
 
     callback_url = _cfg("callback_url") or cfg.DOC_OCR_CALLBACK_URL

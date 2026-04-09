@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -27,6 +28,7 @@ class DocOCRClient:
         authorization: str = "",
         app_id: str = "",
         department_id: str = "",
+        mock_result_path: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.conversation_url = conversation_url
@@ -35,6 +37,37 @@ class DocOCRClient:
         self.authorization = authorization
         self.app_id = app_id
         self.department_id = department_id
+        self.mock_result_path = mock_result_path
+
+    def _load_mock_result(self) -> AgentResult:
+        mock_path = Path(self.mock_result_path).expanduser()
+        if not mock_path.is_absolute():
+            mock_path = (Path.cwd() / mock_path).resolve()
+
+        try:
+            data = json.loads(mock_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            logger.error({"event": "doc_ocr_mock_result.missing", "path": str(mock_path)})
+            return AgentResult(ok=False, data={}, error=f"Mock result file not found: {mock_path}")
+        except json.JSONDecodeError as exc:
+            logger.error({"event": "doc_ocr_mock_result.invalid_json", "path": str(mock_path), "error": str(exc)})
+            return AgentResult(ok=False, data={}, error=f"Mock result file is not valid JSON: {mock_path}")
+        except Exception as exc:
+            logger.exception({"event": "doc_ocr_mock_result.load_failed", "path": str(mock_path), "error": str(exc)})
+            return AgentResult(ok=False, data={}, error=f"Failed to load mock result file: {exc}")
+
+        if not isinstance(data, dict):
+            logger.error({"event": "doc_ocr_mock_result.invalid_shape", "path": str(mock_path)})
+            return AgentResult(ok=False, data={}, error="Mock result file must contain a JSON object")
+
+        logger.info({"event": "doc_ocr_mock_result.loaded", "path": str(mock_path)})
+        return AgentResult(ok=True, data=data)
+
+    async def run_doc_ocr_mock(self, *, local_file_path: str, options: Dict[str, Any]) -> AgentResult:
+        return self._load_mock_result()
+
+    async def run_doc_ocr_mock_many(self, *, local_file_paths: list[str], options: Dict[str, Any]) -> AgentResult:
+        return self._load_mock_result()
 
     async def run_doc_ocr(self, *, local_file_path: str, options: Dict[str, Any]) -> AgentResult:
         # -------------------------

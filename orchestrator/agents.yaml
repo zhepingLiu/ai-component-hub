@@ -14,4 +14,6 @@ agents:
     headers:
       X-Private-Key: "your_private_key"
       channel: "your_channel"
+    mock_enabled: true
+    mock_result_file: "app/agents/doc_ocr/mock_result.json"
     use_real: true
