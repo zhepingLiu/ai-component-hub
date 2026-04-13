@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..agent_registry import get_handler_name, load_agent_handler
 from ..config import settings
+from ..logging_utils import resolve_chanl_no, update_log_context
 from ..schemas.common import AgentStatusResp
 from ..services.agent_runtime import AgentContext
 from ..services.job_tracker import InMemoryJobTracker, JobTracker
@@ -54,6 +55,16 @@ async def run_agent(name: str, request: Request):
     if isinstance(json_body, dict):
         request_id = json_body.get("request_id")
     request_id = tracker.ensure_request_id(request_id)
+    trace_id = getattr(request.state, "trace_id", request.headers.get("X-Trace-Id", ""))
+
+    update_log_context(
+        seqNo=request_id,
+        sysTraceId=trace_id or request_id,
+        sysSpaInd=request_id,
+        sysParentSpaInd="",
+        svCode=name,
+        chanlNo=resolve_chanl_no(request=request, settings=settings, agent_config=agent_cfg),
+    )
 
     handler_name = get_handler_name(name, agent_cfg)
     try:

@@ -10,6 +10,7 @@ from .health import router as health_router
 from .redis_client import create_redis_client
 from .agent_registry import build_gateway_entries, load_agent_configs
 from .logging_utils import setup_logging
+from .middleware import RequestLogMiddleware
 from .config import settings
 
 from .routers.agent_gateway import router as agent_gateway_router
@@ -20,6 +21,8 @@ setup_logging(
     log_dir=settings.LOG_DIR,
     level=settings.LOG_LEVEL,
     retention_days=settings.LOG_RETENTION_DAYS,
+    system_code=settings.SYSTEM_CODE,
+    max_bytes=settings.LOG_MAX_BYTES,
 )
 logger = logging.getLogger("orchestrator")
 
@@ -129,6 +132,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.add_middleware(RequestLogMiddleware)
 
     app.include_router(health_router, tags=["health"])
     app.include_router(agent_gateway_router, tags=["agents"])

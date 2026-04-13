@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from ..logging_utils import outbound_extra
+
 
 async def send_callback(
     *,
@@ -21,7 +23,10 @@ async def send_callback(
     trace_id: str | None,
 ) -> dict[str, Any]:
     if not callback_url:
-        logger.info({"event": "callback.skip", "request_id": request_id, "trace_id": trace_id})
+        logger.info(
+            {"event": "callback.skip", "request_id": request_id, "trace_id": trace_id},
+            extra=outbound_extra(),
+        )
         return {"status": "SKIPPED", "error": None, "attempts": 0}
 
     last_error: str | None = None
@@ -43,7 +48,8 @@ async def send_callback(
                     "trace_id": trace_id,
                     "attempt": attempt,
                     "content_type": content_type or "application/json",
-                }
+                },
+                extra=outbound_extra(),
             )
             return {"status": "OK", "error": None, "attempts": attempt}
         except Exception as exc:
@@ -55,7 +61,8 @@ async def send_callback(
                     "trace_id": trace_id,
                     "attempt": attempt,
                     "error": last_error,
-                }
+                },
+                extra=outbound_extra(faultCode="CALLBACK_RETRY"),
             )
             if attempt < max_retries:
                 delay = base_delay * (2 ** (attempt - 1))
@@ -67,6 +74,7 @@ async def send_callback(
             "request_id": request_id,
             "trace_id": trace_id,
             "error": last_error,
-        }
+        },
+        extra=outbound_extra(faultCode="CALLBACK_FAILED"),
     )
     return {"status": "FAILED", "error": last_error, "attempts": max_retries}

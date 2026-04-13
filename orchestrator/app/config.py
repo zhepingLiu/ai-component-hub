@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
+    SYSTEM_CODE: str = os.getenv("SYSTEM_CODE", "ai-component-hub")
+    CHANNEL: str = os.getenv("CHANNEL", "")
+
     # Redis
     REDIS_HOST: str = os.getenv("REDIS_HOST", "redis")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
@@ -30,9 +33,10 @@ class Settings(BaseSettings):
     FILE_SERVER_APPSOURCE: str = os.getenv("FILE_SERVER_APPSOURCE", "CQRCB_ESBFILE_SOURCE")
 
     # Logging
-    LOG_DIR: str = os.getenv("LOG_DIR", "/app/data/logs")
+    LOG_DIR: str = os.getenv("LOG_DIR", "/app/root/logs")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "10"))
+    LOG_MAX_BYTES: int = int(os.getenv("LOG_MAX_BYTES", str(1024 * 1024)))
 
     # Agent proxy
     REQUEST_TIMEOUT_SEC: float = float(os.getenv("REQUEST_TIMEOUT_SEC", "15.0"))

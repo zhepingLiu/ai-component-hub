@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
+
+from .logging_utils import get_runtime_log_level, set_runtime_log_level
 
 router = APIRouter()
+
+
+class LogLevelPayload(BaseModel):
+    level: str
 
 @router.get("/health")
 def health(request: Request):
@@ -17,3 +24,17 @@ def health(request: Request):
             redis_ok = False
 
     return {"status": "ok", "service": "orchestrator", "redis": redis_ok}
+
+
+@router.get("/log-level")
+def get_log_level():
+    return {"logLevel": get_runtime_log_level()}
+
+
+@router.post("/log-level")
+def update_log_level(payload: LogLevelPayload):
+    try:
+        level = set_runtime_log_level(payload.level)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"logLevel": level}

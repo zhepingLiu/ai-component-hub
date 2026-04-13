@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..config import settings
+from ..logging_utils import outbound_extra, resolve_chanl_no, update_log_context
 from ..redis_client import get_redis
 from ..route_table import RouteTable
 from ..schemas.route_schemas import RouteEntry, StdResp
@@ -23,7 +24,10 @@ def register(ep: RouteEntry, request: Request):
     table = RouteTable(get_redis(request.app), settings.REDIS_KEY_PREFIX)
     key = f"{ep.category}.{ep.action}"
     table.add(key, ep.url)
-    logger.info({"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url})
+    logger.info(
+        {"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url},
+        extra=outbound_extra(chanlNo=resolve_chanl_no(request=request, settings=settings)),
+    )
     return {"code": 0, "msg": "ok"}
 
 
@@ -49,6 +53,10 @@ def _resolve_agent_target(request: Request, name: str) -> tuple[str | None, dict
 @router.api_route("/api/agents/{name}", methods=["GET", "POST"])
 async def proxy_agent(name: str, request: Request):
     target, extra_query, extra_headers = _resolve_agent_target(request, name)
+    update_log_context(
+        svCode=name,
+        chanlNo=resolve_chanl_no(request=request, settings=settings),
+    )
     if not target:
         logger.warning(
             {
@@ -95,6 +103,10 @@ async def proxy_agent(name: str, request: Request):
     timeout = httpx.Timeout(settings.REQUEST_TIMEOUT_SEC)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         try:
+            logger.info(
+                {"event": "proxy.upstream.request", "agent": name, "target": target, "method": method},
+                extra=outbound_extra(chanlNo=resolve_chanl_no(request=request, settings=settings), svCode=name),
+            )
             resp = await client.request(
                 method,
                 target,
@@ -103,10 +115,25 @@ async def proxy_agent(name: str, request: Request):
                 json=body if isinstance(body, dict) else None,
                 content=body if isinstance(body, (bytes, str)) else None,
             )
+            logger.info(
+                {"event": "proxy.upstream.response", "agent": name, "target": target, "status": resp.status_code},
+                extra=outbound_extra(
+                    chanlNo=resolve_chanl_no(request=request, settings=settings),
+                    svCode=name,
+                    faultCode="" if resp.status_code < 400 else str(resp.status_code),
+                ),
+            )
         except httpx.TimeoutException:
+            logger.error(
+                {"event": "proxy.upstream.timeout", "agent": name, "target": target, "faultCode": "504"},
+                extra=outbound_extra(chanlNo=resolve_chanl_no(request=request, settings=settings), svCode=name, faultCode="504"),
+            )
             return JSONResponse(StdResp(code=504, message="upstream_timeout").model_dump(), status_code=504)
         except httpx.RequestError as e:
-            logger.exception(e)
+            logger.exception(
+                {"event": "proxy.upstream.failed", "agent": name, "target": target, "error": str(e), "faultCode": "502"},
+                extra=outbound_extra(chanlNo=resolve_chanl_no(request=request, settings=settings), svCode=name, faultCode="502"),
+            )
             return JSONResponse(StdResp(code=502, message="bad_gateway").model_dump(), status_code=502)
 
     try:
