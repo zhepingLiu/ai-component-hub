@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     DOC_OCR_CALLBACK_TIMEOUT_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_TIMEOUT_SEC", "10.0"))
     DOC_OCR_CALLBACK_MAX_RETRIES: int = int(os.getenv("DOC_OCR_CALLBACK_MAX_RETRIES", "5"))
     DOC_OCR_CALLBACK_BASE_DELAY_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_BASE_DELAY_SEC", "1.0"))
+    DOC_OCR_CONSUMERS: int = int(os.getenv("DOC_OCR_CONSUMERS", "3"))
+    DOC_OCR_QUEUE_SIZE: int = int(os.getenv("DOC_OCR_QUEUE_SIZE", "100"))
 
     # Agent config
     AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")

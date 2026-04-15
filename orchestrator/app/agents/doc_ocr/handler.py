@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -373,6 +372,7 @@ async def run(ctx: AgentContext):
     )
 
     callback_url = _cfg("callback_url") or cfg.DOC_OCR_CALLBACK_URL
+    queue = ctx.request.app.state.doc_ocr_queue
 
     logger.info({"event": "doc_ocr.received", "request_id": request_id, "trace_id": trace_id})
 
@@ -394,11 +394,10 @@ async def run(ctx: AgentContext):
         logger.info({"event": "doc_ocr.lock_busy", "request_id": request_id})
         return DocOCRResp(request_id=request_id, status="RUNNING")
 
-    tracker.set_status(request_id, status="RECEIVED", result=None, error=None, ttl=cfg.JOB_TTL_SEC)
-    logger.info({"event": "doc_ocr.accepted", "request_id": request_id, "trace_id": trace_id})
+    tracker.set_status(request_id, status="QUEUED", result=None, error=None, ttl=cfg.JOB_TTL_SEC)
 
-    asyncio.create_task(
-        _process_doc_ocr(
+    def _job_factory():
+        return _process_doc_ocr(
             ctx=ctx,
             req=req,
             client=client,
@@ -408,9 +407,21 @@ async def run(ctx: AgentContext):
             callback_max_retries=cfg.DOC_OCR_CALLBACK_MAX_RETRIES,
             callback_base_delay=cfg.DOC_OCR_CALLBACK_BASE_DELAY_SEC,
         )
-    )
+
+    accepted = queue.try_enqueue_nowait(request_id, _job_factory)
+    if not accepted:
+        error = "queue_full"
+        tracker.set_status(request_id, status="REJECTED", result=None, error=error, ttl=cfg.JOB_TTL_SEC)
+        tracker.release_lock(request_id, token)
+        logger.warning({"event": "doc_ocr.rejected_queue_full", "request_id": request_id, "trace_id": trace_id})
+        return JSONResponse(
+            status_code=429,
+            content=DocOCRResp(request_id=request_id, status="REJECTED", error=error).model_dump(exclude_none=True),
+        )
+
+    logger.info({"event": "doc_ocr.queued", "request_id": request_id, "trace_id": trace_id})
 
     return JSONResponse(
         status_code=202,
-        content=DocOCRResp(request_id=request_id, status="RECEIVED").model_dump(exclude_none=True),
+        content=DocOCRResp(request_id=request_id, status="QUEUED").model_dump(exclude_none=True),
     )

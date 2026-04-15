@@ -12,6 +12,7 @@ from .agent_registry import build_gateway_entries, load_agent_configs
 from .logging_utils import setup_logging
 from .middleware import RequestLogMiddleware
 from .config import settings
+from .services.inmemory_queue import InMemoryJobQueue
 
 from .routers.agent_gateway import router as agent_gateway_router
 from .routers.agent_runner import router as agent_runner_router
@@ -103,10 +104,22 @@ async def lifespan(app: FastAPI):
     app.state.redis = None
     app.state.redis_lock = asyncio.Lock()
     app.state.agent_configs = {}
+    app.state.doc_ocr_queue = InMemoryJobQueue(
+        maxsize=settings.DOC_OCR_QUEUE_SIZE,
+        consumer_count=settings.DOC_OCR_CONSUMERS,
+    )
 
     app.state.agent_configs = load_agent_configs(settings.AGENT_CONFIG_FILE)
     if app.state.agent_configs:
         logger.info({"event": "agents.config_loaded", "count": len(app.state.agent_configs)})
+    logger.info(
+        {
+            "event": "doc_ocr.queue.configured",
+            "consumer_count": settings.DOC_OCR_CONSUMERS,
+            "queue_size": settings.DOC_OCR_QUEUE_SIZE,
+        }
+    )
+    await app.state.doc_ocr_queue.start()
 
     await register_to_gateway()
 
@@ -119,6 +132,10 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         # redis-py 没有显式 close 也可，但这里做得更干净
+        try:
+            await app.state.doc_ocr_queue.stop()
+        except Exception:
+            pass
         try:
             if app.state.redis:
                 app.state.redis.close()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from datetime import datetime
 
@@ -17,7 +16,7 @@ logger = logging.getLogger("orchestrator")
 
 def _timestamp_now() -> tuple[str, int]:
     now = datetime.now()
-    formatted = now.strftime("%Y%m%d%H%M%S") + f"{now.microsecond // 1000:03d}"
+    formatted = now.strftime("%Y-%m-%d %H:%M:%S") + f":{now.microsecond // 1000:03d}"
     epoch_ms = int(now.timestamp() * 1000)
     return formatted, epoch_ms
 
@@ -43,8 +42,6 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             faultCode="",
             serverReceiveTime=receive_time,
         )
-        started = time.time()
-
         try:
             response = await call_next(request)
             return_time, return_time_ms = _timestamp_now()
@@ -61,7 +58,6 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
                     "method": request.method,
                     "path": request.url.path,
                     "status": response.status_code,
-                    "durationMs": round((time.time() - started) * 1000, 2),
                 }
             )
             response.headers["X-Trace-Id"] = trace_id

@@ -12,7 +12,7 @@ class LogLevelPayload(BaseModel):
     level: str
 
 @router.get("/health")
-def health(request: Request):
+async def health(request: Request):
     r = request.app.state.redis
     if not r:
         redis_ok = False
@@ -23,7 +23,9 @@ def health(request: Request):
         except Exception:
             redis_ok = False
 
-    return {"status": "ok", "service": "orchestrator", "redis": redis_ok}
+    queue = getattr(request.app.state, "doc_ocr_queue", None)
+    queue_stats = await queue.snapshot() if queue else None
+    return {"status": "ok", "service": "orchestrator", "redis": redis_ok, "doc_ocr": queue_stats}
 
 
 @router.get("/log-level")

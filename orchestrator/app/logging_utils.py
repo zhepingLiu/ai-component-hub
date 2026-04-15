@@ -61,7 +61,11 @@ def set_runtime_log_level(level: str) -> str:
 
 
 def _format_timestamp(value: datetime) -> str:
-    return value.strftime("%Y%m%d%H%M%S") + f"{value.microsecond // 1000:03d}"
+    return value.strftime("%Y-%m-%d %H:%M:%S") + f":{value.microsecond // 1000:03d}"
+
+
+def _format_prefix_timestamp(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _message_text(payload: dict[str, Any], record: logging.LogRecord) -> str:
@@ -72,6 +76,15 @@ def _message_text(payload: dict[str, Any], record: logging.LogRecord) -> str:
     if isinstance(record.msg, dict):
         return json.dumps(payload, ensure_ascii=True, default=str)
     return record.getMessage()
+
+
+def _normalize_prefix_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("{'") and text.endswith("'}"):
+        text = text[2:-2]
+    elif text.startswith('"') and text.endswith('"'):
+        text = text[1:-1]
+    return " ".join(text.split())
 
 
 def resolve_chanl_no(*, request: Any = None, settings: Any = None, agent_config: dict[str, Any] | None = None) -> str:
@@ -146,14 +159,24 @@ class SizeAndDateRotatingFileHandler(RotatingFileHandler):
             shutil.copyfileobj(src, dst)
         os.remove(source)
 
+    def _archive_file(self, file_path: str) -> None:
+        if not file_path or not os.path.exists(file_path) or os.path.isdir(file_path):
+            return
+        archived_path = self._namer(file_path)
+        if os.path.exists(archived_path):
+            os.remove(archived_path)
+        self._rotator(file_path, archived_path)
+
     def _switch_to_current_date(self) -> None:
         date_str = self._date_str()
         if date_str == self.current_date:
             return
+        previous_filename = self.baseFilename
         self.current_date = date_str
         if self.stream:
             self.stream.close()
             self.stream = None
+        self._archive_file(previous_filename)
         self.baseFilename = os.path.abspath(self._build_filename(date_str))
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -198,8 +221,11 @@ class JsonFormatter(logging.Formatter):
         chanl_no = payload.get("chanlNo") or payload.get("channel") or audit_fields.get("chanlNo", "")
         sys_trace_id = payload.get("sysTraceId") or payload.get("trace_id") or audit_fields.get("sysTraceId", "")
         seq_no = payload.get("seqNo") or payload.get("request_id") or audit_fields.get("seqNo", "")
-        timestamp = _format_timestamp(datetime.fromtimestamp(record.created))
+        created_at = datetime.fromtimestamp(record.created)
+        timestamp = _format_timestamp(created_at)
+        prefix_timestamp = _format_prefix_timestamp(created_at)
         message_text = _message_text(payload, record)
+        prefix_message = _normalize_prefix_text(message_text)
         location = f"{record.filename}:{record.lineno}"
         base = {
             "ts": timestamp,
@@ -231,7 +257,16 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             base["exc_info"] = self.formatException(record.exc_info)
 
-        return json.dumps(base, ensure_ascii=True, default=str)
+        prefix = (
+            f"{prefix_timestamp} "
+            f"{record.levelname} "
+            f"[{str(sys_trace_id or '')}] "
+            f"[{self.service_name}] "
+            f"[{location}] - "
+            f"{prefix_message}"
+        )
+        json_part = json.dumps(base, ensure_ascii=True, default=str)
+        return f"{prefix} {json_part}"
 
 
 def setup_logging(
