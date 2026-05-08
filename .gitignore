@@ -3,4 +3,5 @@ tests/*
 uv.lock
 data/
 *.jpg
+*.HEIC
 __pycache__/

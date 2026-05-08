@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import atexit
 import contextvars
 import gzip
 import json
 import logging
 import os
+import queue
 import shutil
 import sys
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
 
 
 _LOG_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("orchestrator_log_context", default={})
 _RUNTIME_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 _MANAGED_LOGGER_NAMES = ("uvicorn", "uvicorn.error", "uvicorn.access", "httpx", "httpcore")
+_LOG_LISTENER: QueueListener | None = None
 
 
 def set_log_context(**kwargs: Any):
@@ -45,6 +48,9 @@ def _normalize_level(level: str) -> str:
 
 
 def get_runtime_log_level() -> str:
+    root_level = logging.getLogger().getEffectiveLevel()
+    if root_level > 0:
+        return logging.getLevelName(root_level)
     return _RUNTIME_LOG_LEVEL
 
 
@@ -55,9 +61,12 @@ def set_runtime_log_level(level: str) -> str:
 
     root = logging.getLogger()
     root.setLevel(normalized)
+    for logger_name, logger_obj in logging.root.manager.loggerDict.items():
+        if isinstance(logger_obj, logging.Logger) and logger_name.startswith("orchestrator"):
+            logger_obj.setLevel(normalized)
     for name in _MANAGED_LOGGER_NAMES:
         logging.getLogger(name).setLevel(normalized)
-    return normalized
+    return get_runtime_log_level()
 
 
 def _format_timestamp(value: datetime) -> str:
@@ -74,7 +83,7 @@ def _message_text(payload: dict[str, Any], record: logging.LogRecord) -> str:
     if "event" in payload and payload["event"] is not None:
         return str(payload["event"])
     if isinstance(record.msg, dict):
-        return json.dumps(payload, ensure_ascii=True, default=str)
+        return json.dumps(payload, ensure_ascii=False, default=str)
     return record.getMessage()
 
 
@@ -193,6 +202,17 @@ class LogKindFilter(logging.Filter):
         return _resolve_log_kind(record) in self.accepted
 
 
+class ContextSnapshotFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.log_context_snapshot = get_log_context()
+        return True
+
+
+class ContextQueueHandler(QueueHandler):
+    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+        return logging.makeLogRecord(record.__dict__.copy())
+
+
 def _resolve_log_kind(record: logging.LogRecord) -> str:
     explicit = getattr(record, "log_kind", None)
     if explicit:
@@ -216,7 +236,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload = record.msg if isinstance(record.msg, dict) else {"message": record.getMessage()}
-        audit_fields = dict(get_log_context())
+        audit_fields = dict(getattr(record, "log_context_snapshot", {}) or {})
         audit_fields.update(getattr(record, "audit_fields", {}) or {})
         chanl_no = payload.get("chanlNo") or payload.get("channel") or audit_fields.get("chanlNo", "")
         sys_trace_id = payload.get("sysTraceId") or payload.get("trace_id") or audit_fields.get("sysTraceId", "")
@@ -265,7 +285,7 @@ class JsonFormatter(logging.Formatter):
             f"[{location}] - "
             f"{prefix_message}"
         )
-        json_part = json.dumps(base, ensure_ascii=True, default=str)
+        json_part = json.dumps(base, ensure_ascii=False, default=str)
         return f"{prefix} {json_part}"
 
 
@@ -278,7 +298,7 @@ def setup_logging(
     system_code: str,
     max_bytes: int,
 ) -> None:
-    global _CONFIGURED
+    global _CONFIGURED, _LOG_LISTENER
     if _CONFIGURED:
         return
 
@@ -328,10 +348,20 @@ def setup_logging(
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
 
-    root.addHandler(monitor_handler)
-    root.addHandler(out_handler)
-    root.addHandler(error_handler)
-    root.addHandler(stream_handler)
+    log_queue: queue.SimpleQueue[logging.LogRecord] = queue.SimpleQueue()
+    queue_handler = ContextQueueHandler(log_queue)
+    queue_handler.addFilter(ContextSnapshotFilter())
+    root.addHandler(queue_handler)
+
+    _LOG_LISTENER = QueueListener(
+        log_queue,
+        monitor_handler,
+        out_handler,
+        error_handler,
+        stream_handler,
+        respect_handler_level=True,
+    )
+    _LOG_LISTENER.start()
 
     # Clamp common noisy loggers to the same level.
     for name in _MANAGED_LOGGER_NAMES:
@@ -343,3 +373,11 @@ def setup_logging(
 
 
 _CONFIGURED = False
+
+
+@atexit.register
+def _shutdown_log_listener() -> None:
+    global _LOG_LISTENER
+    if _LOG_LISTENER is not None:
+        _LOG_LISTENER.stop()
+        _LOG_LISTENER = None

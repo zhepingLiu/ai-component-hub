@@ -90,7 +90,7 @@ async def _process_doc_ocr(
     error = None
 
     try:
-        tracker.set_status(request_id, status="RUNNING", result=None, error=None, ttl=cfg.JOB_TTL_SEC)
+        await tracker.aset_status(request_id, status="RUNNING", result=None, error=None, ttl=cfg.JOB_TTL_SEC)
         logger.info({"event": "doc_ocr.running", "request_id": request_id, "trace_id": trace_id})
 
         file_refs = list(req.files)
@@ -138,7 +138,7 @@ async def _process_doc_ocr(
                         "error": str(exc),
                     }
                 )
-                tracker.set_status(
+                await tracker.aset_status(
                     request_id,
                     status="FAILED",
                     result=None,
@@ -187,7 +187,7 @@ async def _process_doc_ocr(
 
         if not agent_res.ok:
             error = agent_res.error or "agent upstream error"
-            tracker.set_status(
+            await tracker.aset_status(
                 request_id,
                 status="FAILED",
                 result=None,
@@ -217,7 +217,7 @@ async def _process_doc_ocr(
             ],
             "agent": agent_res.data,
         }
-        tracker.set_status(request_id, status="UPLOADING", result=result, error=None, ttl=cfg.JOB_TTL_SEC)
+        await tracker.aset_status(request_id, status="UPLOADING", result=result, error=None, ttl=cfg.JOB_TTL_SEC)
         logger.info({"event": "doc_ocr.uploading", "request_id": request_id, "trace_id": trace_id})
 
         server_paths = []
@@ -253,7 +253,7 @@ async def _process_doc_ocr(
             )
         except Exception as exc:
             error = f"upload_failed: {exc}"
-            tracker.set_status(
+            await tracker.aset_status(
                 request_id,
                 status="FAILED",
                 result=None,
@@ -272,12 +272,12 @@ async def _process_doc_ocr(
             return
 
         result["esb_upload"] = {"server_path": primary_server_path, "server_file": upload_filename}
-        tracker.set_status(request_id, status="SUCCEEDED", result=result, error=None, ttl=cfg.JOB_TTL_SEC)
+        await tracker.aset_status(request_id, status="SUCCEEDED", result=result, error=None, ttl=cfg.JOB_TTL_SEC)
         logger.info({"event": "doc_ocr.succeeded", "request_id": request_id, "trace_id": trace_id})
         status = "SUCCEEDED"
     except Exception as exc:
         error = str(exc)
-        tracker.set_status(
+        await tracker.aset_status(
             request_id,
             status="FAILED",
             result=None,
@@ -327,14 +327,14 @@ async def _process_doc_ocr(
         )
         if status == "SUCCEEDED" and isinstance(result, dict):
             result["callback"] = callback_info
-            tracker.set_status(
+            await tracker.aset_status(
                 request_id,
                 status=status,
                 result=result,
                 error=error,
                 ttl=cfg.JOB_TTL_SEC,
             )
-        tracker.release_lock(request_id, token)
+        await tracker.arelease_lock(request_id, token)
 
 
 async def run(ctx: AgentContext):
@@ -377,7 +377,7 @@ async def run(ctx: AgentContext):
     logger.info({"event": "doc_ocr.received", "request_id": request_id, "trace_id": trace_id})
 
     logger.info({"event": "doc_ocr.check_existing", "request_id": request_id})
-    _, existing = tracker.get_job(request_id)
+    _, existing = await tracker.aget_job(request_id)
     if existing:
         return DocOCRResp(
             request_id=request_id,
@@ -389,12 +389,12 @@ async def run(ctx: AgentContext):
     logger.info(
         {"event": "doc_ocr.acquire_lock", "request_id": request_id, "ttl": cfg.IDEMPOTENCY_TTL_SEC}
     )
-    token, _ = tracker.acquire_lock(request_id, ttl=cfg.IDEMPOTENCY_TTL_SEC)
+    token, _ = await tracker.aacquire_lock(request_id, ttl=cfg.IDEMPOTENCY_TTL_SEC)
     if not token:
         logger.info({"event": "doc_ocr.lock_busy", "request_id": request_id})
         return DocOCRResp(request_id=request_id, status="RUNNING")
 
-    tracker.set_status(request_id, status="QUEUED", result=None, error=None, ttl=cfg.JOB_TTL_SEC)
+    await tracker.aset_status(request_id, status="QUEUED", result=None, error=None, ttl=cfg.JOB_TTL_SEC)
 
     def _job_factory():
         return _process_doc_ocr(
@@ -411,8 +411,8 @@ async def run(ctx: AgentContext):
     accepted = queue.try_enqueue_nowait(request_id, _job_factory)
     if not accepted:
         error = "queue_full"
-        tracker.set_status(request_id, status="REJECTED", result=None, error=error, ttl=cfg.JOB_TTL_SEC)
-        tracker.release_lock(request_id, token)
+        await tracker.aset_status(request_id, status="REJECTED", result=None, error=error, ttl=cfg.JOB_TTL_SEC)
+        await tracker.arelease_lock(request_id, token)
         logger.warning({"event": "doc_ocr.rejected_queue_full", "request_id": request_id, "trace_id": trace_id})
         return JSONResponse(
             status_code=429,

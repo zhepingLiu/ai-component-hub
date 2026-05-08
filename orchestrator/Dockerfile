@@ -8,4 +8,4 @@ COPY orchestrator/agents.yaml ./agents.yaml
 COPY orchestrator/gunicorn.conf.py ./gunicorn.conf.py
 
 EXPOSE 7010
-CMD ["gunicorn", "app.app:app", "-k", "uvicorn.workers.UvicornWorker", "--config", "./gunicorn.conf.py"]
+CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "7010", "--timeout-keep-alive", "5"]

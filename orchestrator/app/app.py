@@ -13,6 +13,7 @@ from .logging_utils import setup_logging
 from .middleware import RequestLogMiddleware
 from .config import settings
 from .services.inmemory_queue import InMemoryJobQueue
+from .services.staging_cleanup import run_staging_cleanup_loop
 
 from .routers.agent_gateway import router as agent_gateway_router
 from .routers.agent_runner import router as agent_runner_router
@@ -104,6 +105,8 @@ async def lifespan(app: FastAPI):
     app.state.redis = None
     app.state.redis_lock = asyncio.Lock()
     app.state.agent_configs = {}
+    app.state.staging_cleanup_task = None
+    app.state.staging_cleanup_stop_event = asyncio.Event()
     app.state.doc_ocr_queue = InMemoryJobQueue(
         maxsize=settings.DOC_OCR_QUEUE_SIZE,
         consumer_count=settings.DOC_OCR_CONSUMERS,
@@ -123,6 +126,26 @@ async def lifespan(app: FastAPI):
 
     await register_to_gateway()
 
+    if settings.STAGING_CLEANUP_ENABLED:
+        app.state.staging_cleanup_task = asyncio.create_task(
+            run_staging_cleanup_loop(
+                staging_dir=settings.STAGING_DIR,
+                retention_sec=settings.STAGING_RETENTION_SEC,
+                interval_sec=settings.STAGING_CLEANUP_INTERVAL_SEC,
+                stop_event=app.state.staging_cleanup_stop_event,
+            )
+        )
+        logger.info(
+            {
+                "event": "staging.cleanup_started",
+                "staging_dir": settings.STAGING_DIR,
+                "retention_sec": settings.STAGING_RETENTION_SEC,
+                "interval_sec": settings.STAGING_CLEANUP_INTERVAL_SEC,
+            }
+        )
+    else:
+        logger.info({"event": "staging.cleanup_disabled"})
+
     if settings.REDIS_REQUIRED:
         # 后台初始化，避免启动被 Redis 阻塞
         asyncio.create_task(_init_redis_once(app))
@@ -132,6 +155,12 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         # redis-py 没有显式 close 也可，但这里做得更干净
+        try:
+            app.state.staging_cleanup_stop_event.set()
+            if app.state.staging_cleanup_task:
+                await app.state.staging_cleanup_task
+        except Exception:
+            pass
         try:
             await app.state.doc_ocr_queue.stop()
         except Exception:

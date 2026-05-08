@@ -33,7 +33,7 @@ async def run_agent(name: str, request: Request):
 
     if request.method == "GET":
         request_id = tracker.ensure_request_id(request.query_params.get("request_id"))
-        _, existing = tracker.get_job(request_id)
+        _, existing = await tracker.aget_job(request_id)
         if existing:
             return AgentStatusResp(
                 request_id=request_id,

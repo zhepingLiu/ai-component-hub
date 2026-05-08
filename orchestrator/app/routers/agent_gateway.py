@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -50,9 +51,13 @@ def _resolve_agent_target(request: Request, name: str) -> tuple[str | None, dict
     return table.resolve("agents", name), {}, {}
 
 
+async def _resolve_agent_target_async(request: Request, name: str) -> tuple[str | None, dict, dict]:
+    return await asyncio.to_thread(_resolve_agent_target, request, name)
+
+
 @router.api_route("/api/agents/{name}", methods=["GET", "POST"])
 async def proxy_agent(name: str, request: Request):
-    target, extra_query, extra_headers = _resolve_agent_target(request, name)
+    target, extra_query, extra_headers = await _resolve_agent_target_async(request, name)
     update_log_context(
         svCode=name,
         chanlNo=resolve_chanl_no(request=request, settings=settings),

@@ -53,32 +53,35 @@ class RouteTable:
             retry_on_timeout=True,
         )
         self._routes = {}
-        self.reload()   # 启动时加载一次
+        if self.settings.ROUTES_PRELOAD_ON_STARTUP:
+            self.reload()
 
     # ------------------------------------------------------------------
     # 🔄 reload(): 从 Redis 同步整个路由表
     # ------------------------------------------------------------------
     def reload(self):
         try:
-            self._routes = self.r.hgetall(self.redis_key) or {}
+            routes = self.r.hgetall(self.redis_key) or {}
         except Exception as exc:
             logger.exception(
                 {
                     "event": "routes.reload_failed",
                     "redis_key": self.redis_key,
                     "error": str(exc),
+                    "cached_routes": len(self._routes),
                 }
             )
-            self._routes = {}
+            return
+        self._routes = routes
 
     # ------------------------------------------------------------------
     # 🔍 resolve(): 根据 category + action 得到 URL
     # ------------------------------------------------------------------
     def resolve(self, category: str, action: str) -> str | None:
         key = f"{category}.{action}"
-        value = self._routes.get(key)
-        if value:
-            return value
+        cached_value = self._routes.get(key)
+        if self.settings.ROUTES_CACHE_ENABLED and cached_value:
+            return cached_value
         try:
             value = self.r.hget(self.redis_key, key)
         except Exception as exc:
@@ -88,12 +91,16 @@ class RouteTable:
                     "redis_key": self.redis_key,
                     "key": key,
                     "error": str(exc),
+                    "cached": bool(cached_value),
                 }
             )
-            return None
+            return cached_value
         if value:
             self._routes[key] = value
-        return value
+            return value
+        if not self.settings.ROUTES_CACHE_ENABLED:
+            self._routes.pop(key, None)
+        return None
 
     # ------------------------------------------------------------------
     # ⬅️ __setitem__(): 支持 route_table["tools.add"] = url

@@ -1,8 +1,10 @@
 import asyncio
 import json, httpx, logging, yaml
+import os
+from pydantic import BaseModel
 
 from .config import settings
-from .logging_utils import setup_logging
+from .logging_utils import get_runtime_log_level, outbound_extra, set_runtime_log_level, setup_logging
 from .middleware import TraceLogMiddleware, ApiKeyMiddleware
 from .schemas import StdResp
 from .schemas import RouteEntry
@@ -26,8 +28,15 @@ setup_logging(
     log_dir=settings.LOG_DIR,
     level=settings.LOG_LEVEL,
     retention_days=settings.LOG_RETENTION_DAYS,
+    system_code=settings.SYSTEM_CODE,
+    max_bytes=settings.LOG_MAX_BYTES,
 )
 logger = logging.getLogger("gateway")
+
+
+class LogLevelPayload(BaseModel):
+    level: str | None = None
+    logLevel: str | None = None
 
 # ---------------- Startup logging ----------------
 def _redact(value: str | None) -> str | None:
@@ -73,9 +82,11 @@ app.state.routes_lock = asyncio.Lock()
 if settings.ENABLE_METRICS:
     Instrumentator().instrument(app).expose(app)
 
-async def _init_routes_once(timeout_sec: float = 2.0) -> bool:
+async def _init_routes_once(timeout_sec: float | None = None) -> bool:
     if app.state.routes:
         return True
+    if timeout_sec is None:
+        timeout_sec = settings.ROUTES_INIT_TIMEOUT_SEC
     async with app.state.routes_lock:
         if app.state.routes:
             return True
@@ -87,17 +98,23 @@ async def _init_routes_once(timeout_sec: float = 2.0) -> bool:
             logger.info({"event": "routes.init_ok"})
             return True
         except asyncio.TimeoutError:
-            logger.warning({"event": "routes.init_timeout", "timeout_sec": timeout_sec})
+            logger.warning({"event": "routes.init_timeout", "timeout_sec": timeout_sec, "pid": os.getpid()})
             app.state.routes = None
             return False
         except Exception as exc:
-            logger.exception({"event": "routes.init_failed", "error": str(exc)})
+            logger.exception({"event": "routes.init_failed", "error": str(exc), "pid": os.getpid()})
             app.state.routes = None
             return False
 
 @app.on_event("startup")
 async def _bootstrap_routes():
     asyncio.create_task(_init_routes_once())
+
+async def _routes_or_503():
+    ok = await _init_routes_once()
+    if not ok or not app.state.routes:
+        raise HTTPException(status_code=503, detail="routes_not_ready")
+    return app.state.routes
 
 # ---------------- Limit ----------------
 @app.exception_handler(RateLimitExceeded)
@@ -108,30 +125,56 @@ def rate_limit_exceeded_handler(request, exc):
 def health():
     return PlainTextResponse("ok")
 
+
+@app.get("/log-level")
+def get_log_level():
+    return {
+        "logLevel": get_runtime_log_level(),
+        "effectiveLevels": {
+            "root": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+            "gateway": logging.getLevelName(logging.getLogger("gateway").getEffectiveLevel()),
+            "uvicorn": logging.getLevelName(logging.getLogger("uvicorn").getEffectiveLevel()),
+        },
+    }
+
+
+@app.post("/log-level")
+def update_log_level(payload: LogLevelPayload):
+    requested_level = payload.level or payload.logLevel
+    if not requested_level:
+        raise HTTPException(status_code=400, detail="missing level or logLevel")
+    before = get_runtime_log_level()
+    level = set_runtime_log_level(requested_level)
+    logger.warning({"event": "log.level.changed", "before": before, "after": level})
+    return {
+        "logLevel": level,
+        "effectiveLevels": {
+            "root": logging.getLevelName(logging.getLogger().getEffectiveLevel()),
+            "gateway": logging.getLevelName(logging.getLogger("gateway").getEffectiveLevel()),
+            "uvicorn": logging.getLevelName(logging.getLogger("uvicorn").getEffectiveLevel()),
+        },
+    }
+
 @app.get("/routes/reload")
 async def reload_routes():
-    ok = await _init_routes_once()
-    if not ok or not app.state.routes:
-        raise HTTPException(status_code=503, detail="routes_not_ready")
-    app.state.routes.reload()
-    logger.info({"event": "routes.reload"})
+    routes = await _routes_or_503()
+    await asyncio.to_thread(routes.reload)
+    logger.info({"event": "routes.reload", "pid": os.getpid()})
     return StdResp(code=0, message="routes reloaded").model_dump()
 
 @app.post("/register")
-def register(ep: RouteEntry):
-    if not app.state.routes:
-        raise HTTPException(status_code=503, detail="routes_not_ready")
+async def register(ep: RouteEntry):
+    routes = await _routes_or_503()
     key = f"{ep.category}.{ep.action}"
-    app.state.routes.add(key, ep.url)
+    await asyncio.to_thread(routes.add, key, ep.url)
     logger.info({"event": "routes.register", "category": ep.category, "action": ep.action, "url": ep.url})
     return {"code": 0, "msg": "ok"}
 
 @limiter.limit("60/minute")
 @app.api_route(f"{settings.API_PREFIX}" + "/{category}/{action}", methods=["GET","POST"])
 async def proxy(category: str, action: str, request: Request):
-    if not app.state.routes:
-        raise HTTPException(status_code=503, detail="routes_not_ready")
-    target = app.state.routes.resolve(category, action)
+    routes = await _routes_or_503()
+    target = await asyncio.to_thread(routes.resolve, category, action)
     if not target:
         logger.warning(
             {
@@ -183,6 +226,10 @@ async def proxy(category: str, action: str, request: Request):
     timeout = httpx.Timeout(settings.REQUEST_TIMEOUT_SEC)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         try:
+            logger.info(
+                {"event": "proxy.upstream.request", "category": category, "action": action, "target": target, "method": method},
+                extra=outbound_extra(traceId=getattr(request.state, "trace_id", ""), seqNo=getattr(request.state, "request_id", "")),
+            )
             resp = await client.request(
                 method, 
                 target, 
@@ -191,10 +238,21 @@ async def proxy(category: str, action: str, request: Request):
                 json=body if isinstance(body, dict) else None,
                 content=body if isinstance(body, (bytes, str)) else None,
                 )
+            logger.info(
+                {"event": "proxy.upstream.response", "category": category, "action": action, "target": target, "status": resp.status_code},
+                extra=outbound_extra(traceId=getattr(request.state, "trace_id", ""), seqNo=getattr(request.state, "request_id", "")),
+            )
         except httpx.TimeoutException:
+            logger.error(
+                {"event": "proxy.upstream.timeout", "category": category, "action": action, "target": target},
+                extra=outbound_extra(traceId=getattr(request.state, "trace_id", ""), seqNo=getattr(request.state, "request_id", "")),
+            )
             return JSONResponse(StdResp(code=504, message="upstream_timeout").model_dump(), status_code=504)
         except httpx.RequestError as e:
-            logger.exception(e)
+            logger.exception(
+                {"event": "proxy.upstream.failed", "category": category, "action": action, "target": target, "error": str(e)},
+                extra=outbound_extra(traceId=getattr(request.state, "trace_id", ""), seqNo=getattr(request.state, "request_id", "")),
+            )
             return JSONResponse(StdResp(code=502, message="bad_gateway").model_dump(), status_code=502)
 
     # 统一响应

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -31,12 +32,18 @@ class JobTracker:
         raw = self.r.get(job_key)
         return job_key, json.loads(raw) if raw else None
 
+    async def aget_job(self, request_id: str) -> tuple[str, dict[str, Any] | None]:
+        return await asyncio.to_thread(self.get_job, request_id)
+
     def acquire_lock(self, request_id: str, ttl: int) -> tuple[str | None, str]:
         lock_key = self._key("lock", request_id)
         token = str(uuid.uuid4())
         logger.debug({"event": "job_tracker.acquire_lock", "request_id": request_id, "key": lock_key, "ttl": ttl})
         got_lock = self.r.set(lock_key, token, nx=True, ex=ttl)
         return (token if got_lock else None), lock_key
+
+    async def aacquire_lock(self, request_id: str, ttl: int) -> tuple[str | None, str]:
+        return await asyncio.to_thread(self.acquire_lock, request_id, ttl)
 
     def release_lock(self, request_id: str, token: str) -> None:
         lock_key = self._key("lock", request_id)
@@ -47,12 +54,33 @@ class JobTracker:
         except Exception:
             pass
 
+    async def arelease_lock(self, request_id: str, token: str) -> None:
+        await asyncio.to_thread(self.release_lock, request_id, token)
+
     def set_status(self, request_id: str, status: str, *, result: Any = None, error: str | None = None, ttl: int = 0) -> tuple[str, dict[str, Any]]:
         job_key = self._key("job", request_id)
         payload = {"status": status, "result": result, "error": error}
         logger.debug({"event": "job_tracker.set_status", "request_id": request_id, "key": job_key, "status": status, "ttl": ttl})
         self.r.set(job_key, json.dumps(payload), ex=ttl or None)
         return job_key, payload
+
+    async def aset_status(
+        self,
+        request_id: str,
+        status: str,
+        *,
+        result: Any = None,
+        error: str | None = None,
+        ttl: int = 0,
+    ) -> tuple[str, dict[str, Any]]:
+        return await asyncio.to_thread(
+            self.set_status,
+            request_id,
+            status,
+            result=result,
+            error=error,
+            ttl=ttl,
+        )
 
 
 class InMemoryJobTracker:
@@ -72,6 +100,9 @@ class InMemoryJobTracker:
         job_key = self._key("job", request_id)
         return job_key, self._jobs.get(job_key)
 
+    async def aget_job(self, request_id: str) -> tuple[str, dict[str, Any] | None]:
+        return self.get_job(request_id)
+
     def acquire_lock(self, request_id: str, ttl: int) -> tuple[str | None, str]:
         lock_key = self._key("lock", request_id)
         if lock_key in self._locks:
@@ -80,12 +111,29 @@ class InMemoryJobTracker:
         self._locks.add(lock_key)
         return token, lock_key
 
+    async def aacquire_lock(self, request_id: str, ttl: int) -> tuple[str | None, str]:
+        return self.acquire_lock(request_id, ttl)
+
     def release_lock(self, request_id: str, token: str) -> None:
         lock_key = self._key("lock", request_id)
         self._locks.discard(lock_key)
+
+    async def arelease_lock(self, request_id: str, token: str) -> None:
+        self.release_lock(request_id, token)
 
     def set_status(self, request_id: str, status: str, *, result: Any = None, error: str | None = None, ttl: int = 0) -> tuple[str, dict[str, Any]]:
         job_key = self._key("job", request_id)
         payload = {"status": status, "result": result, "error": error}
         self._jobs[job_key] = payload
         return job_key, payload
+
+    async def aset_status(
+        self,
+        request_id: str,
+        status: str,
+        *,
+        result: Any = None,
+        error: str | None = None,
+        ttl: int = 0,
+    ) -> tuple[str, dict[str, Any]]:
+        return self.set_status(request_id, status, result=result, error=error, ttl=ttl)

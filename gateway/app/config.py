@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+import os
 
 
 class Settings(BaseSettings):
@@ -18,9 +19,14 @@ class Settings(BaseSettings):
     REDIS_KEY_PREFIX: str = "aihub:gateway"
     REDIS_SOCKET_CONNECT_TIMEOUT: float = 1.0
     REDIS_SOCKET_TIMEOUT: float = 1.0
+    ROUTES_INIT_TIMEOUT_SEC: float = 5.0
+    ROUTES_PRELOAD_ON_STARTUP: bool = False
+    ROUTES_CACHE_ENABLED: bool = True
     LOG_DIR: str = "/app/data/logs"
     LOG_LEVEL: str = "INFO"
     LOG_RETENTION_DAYS: int = 10
+    SYSTEM_CODE: str = os.getenv("SYSTEM_CODE", "ai-component-hub")
+    LOG_MAX_BYTES: int = int(os.getenv("LOG_MAX_BYTES", str(1024 * 1024)))
 
     class Config:
         env_file = ".env"

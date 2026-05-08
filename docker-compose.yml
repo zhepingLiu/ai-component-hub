@@ -58,7 +58,6 @@ services:
       - REDIS_PORT=6379
       - REDIS_KEY_PREFIX=aihub:orchestrator
       - STAGING_DIR=/app/data/staging
-      - WEB_CONCURRENCY=1
       - DOC_OCR_CONSUMERS=3
       - DOC_OCR_QUEUE_SIZE=100
     volumes:

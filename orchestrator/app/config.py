@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     # staging 目录（容器内可写路径）
     STAGING_DIR: str = os.getenv("STAGING_DIR", "/app/data/staging")
+    STAGING_CLEANUP_ENABLED: bool = os.getenv("STAGING_CLEANUP_ENABLED", "true").lower() == "true"
+    STAGING_CLEANUP_INTERVAL_SEC: int = int(os.getenv("STAGING_CLEANUP_INTERVAL_SEC", "7200"))
+    STAGING_RETENTION_SEC: int = int(os.getenv("STAGING_RETENTION_SEC", "10800"))
 
     # ESB service base URL（同 docker-compose 内服务名）
     ESB_BASE_URL: str = os.getenv("ESB_BASE_URL", "http://esb:7002")
