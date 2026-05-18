@@ -27,9 +27,15 @@ async def health(request: Request):
         except Exception:
             redis_ok = False
 
-    queue = getattr(request.app.state, "doc_ocr_queue", None)
-    queue_stats = await queue.snapshot() if queue else None
-    return {"status": "ok", "service": "orchestrator", "redis": redis_ok, "doc_ocr": queue_stats}
+    queues = getattr(request.app.state, "agent_queues", {}) or {}
+    queue_stats = {name: await queue.snapshot() for name, queue in queues.items()}
+    return {
+        "status": "ok",
+        "service": "orchestrator",
+        "redis": redis_ok,
+        "agents": queue_stats,
+        "doc_ocr": queue_stats.get("doc-ocr"),
+    }
 
 
 @router.get("/log-level")

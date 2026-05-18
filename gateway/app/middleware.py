@@ -32,7 +32,8 @@ class TraceLogMiddleware(BaseHTTPMiddleware):
                 serverReturnTime=return_time,
                 usedTime=str(return_time_ms - receive_time_ms),
             )
-            logger.info({
+            log_completed = logger.debug if request.url.path == "/health" else logger.info
+            log_completed({
                 "event": "request.completed",
                 "trace_id": trace_id,
                 "request_id": request_id,

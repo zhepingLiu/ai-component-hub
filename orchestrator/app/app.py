@@ -100,29 +100,45 @@ async def _init_redis_once(app: FastAPI, timeout_sec: float = 2.0) -> bool:
             return False
 
 
+def _build_agent_queues(agent_configs: dict[str, dict]) -> dict[str, InMemoryJobQueue]:
+    queues: dict[str, InMemoryJobQueue] = {}
+    for name, cfg in agent_configs.items():
+        queue_size = cfg.get("queue_size")
+        consumer_count = cfg.get("consumer_count") or cfg.get("consumers")
+        if name == "doc-ocr":
+            queue_size = queue_size or settings.DOC_OCR_QUEUE_SIZE
+            consumer_count = consumer_count or settings.DOC_OCR_CONSUMERS
+        queues[name] = InMemoryJobQueue(
+            maxsize=int(queue_size or settings.DOC_OCR_QUEUE_SIZE),
+            consumer_count=int(consumer_count or settings.DOC_OCR_CONSUMERS),
+        )
+    return queues
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = None
     app.state.redis_lock = asyncio.Lock()
     app.state.agent_configs = {}
+    app.state.agent_queues = {}
     app.state.staging_cleanup_task = None
     app.state.staging_cleanup_stop_event = asyncio.Event()
-    app.state.doc_ocr_queue = InMemoryJobQueue(
-        maxsize=settings.DOC_OCR_QUEUE_SIZE,
-        consumer_count=settings.DOC_OCR_CONSUMERS,
-    )
 
     app.state.agent_configs = load_agent_configs(settings.AGENT_CONFIG_FILE)
     if app.state.agent_configs:
         logger.info({"event": "agents.config_loaded", "count": len(app.state.agent_configs)})
-    logger.info(
-        {
-            "event": "doc_ocr.queue.configured",
-            "consumer_count": settings.DOC_OCR_CONSUMERS,
-            "queue_size": settings.DOC_OCR_QUEUE_SIZE,
-        }
-    )
-    await app.state.doc_ocr_queue.start()
+    app.state.agent_queues = _build_agent_queues(app.state.agent_configs)
+    app.state.doc_ocr_queue = app.state.agent_queues.get("doc-ocr")
+    for name, queue in app.state.agent_queues.items():
+        logger.info(
+            {
+                "event": "agent.queue.configured",
+                "agent": name,
+                "consumer_count": queue.consumer_count,
+                "queue_size": queue.maxsize,
+            }
+        )
+        await queue.start()
 
     await register_to_gateway()
 
@@ -162,7 +178,8 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         try:
-            await app.state.doc_ocr_queue.stop()
+            for queue in app.state.agent_queues.values():
+                await queue.stop()
         except Exception:
             pass
         try:

@@ -188,6 +188,11 @@ class ContextSnapshotFilter(logging.Filter):
         return True
 
 
+class HealthCheckAccessFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
 class ContextQueueHandler(QueueHandler):
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
         return logging.makeLogRecord(record.__dict__.copy())
@@ -325,6 +330,8 @@ def setup_logging(
 
     for name in _MANAGED_LOGGER_NAMES:
         logging.getLogger(name).setLevel(normalized_level)
+    for name in ("uvicorn.access", "gunicorn.access"):
+        logging.getLogger(name).addFilter(HealthCheckAccessFilter())
 
     set_runtime_log_level(normalized_level)
     _CONFIGURED = True

@@ -52,7 +52,8 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
                 faultCode=fault_code,
                 svCode=request.url.path,
             )
-            logger.info(
+            log_completed = logger.debug if request.url.path == "/health" else logger.info
+            log_completed(
                 {
                     "event": "request.completed",
                     "method": request.method,

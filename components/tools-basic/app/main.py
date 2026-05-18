@@ -66,7 +66,8 @@ class TraceLogMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             return_time, return_time_ms = _timestamp_now()
             update_log_context(serverReturnTime=return_time, usedTime=str(return_time_ms - receive_time_ms))
-            logger.info({"event": "request.completed", "path": request.url.path, "method": request.method, "status": response.status_code})
+            log_completed = logger.debug if request.url.path == "/health" else logger.info
+            log_completed({"event": "request.completed", "path": request.url.path, "method": request.method, "status": response.status_code})
             response.headers["X-Trace-Id"] = trace_id
             response.headers["X-Request-Id"] = request_id
             return response
