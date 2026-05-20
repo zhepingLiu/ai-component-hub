@@ -60,6 +60,8 @@ services:
       - STAGING_DIR=/app/data/staging
       - DOC_OCR_CONSUMERS=3
       - DOC_OCR_QUEUE_SIZE=100
+      - AB_ACCESS_KEY=${AB_ACCESS_KEY:-}
+      - AB_SECRET_KEY=${AB_SECRET_KEY:-}
     volumes:
       - ./data/orchestrator:/app/data
       - ./data/orchestrator-root/logs:/app/root/logs

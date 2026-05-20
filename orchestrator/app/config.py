@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     DOC_OCR_CALLBACK_BASE_DELAY_SEC: float = float(os.getenv("DOC_OCR_CALLBACK_BASE_DELAY_SEC", "1.0"))
     DOC_OCR_CONSUMERS: int = int(os.getenv("DOC_OCR_CONSUMERS", "3"))
     DOC_OCR_QUEUE_SIZE: int = int(os.getenv("DOC_OCR_QUEUE_SIZE", "100"))
+    AB_ACCESS_KEY: str = os.getenv("AB_ACCESS_KEY", "")
+    AB_SECRET_KEY: str = os.getenv("AB_SECRET_KEY", "")
 
     # Agent config
     AGENT_CONFIG_FILE: str = os.getenv("AGENT_CONFIG_FILE", "/app/agents.yaml")

@@ -8,6 +8,7 @@ from typing import Any, Dict
 import httpx
 
 from ...schemas.common import AgentResult
+from ...services.ab_token import build_ab_token_headers
 
 logger = logging.getLogger("orchestrator.doc_ocr.client")
 
@@ -26,6 +27,9 @@ class DocOCRClient:
         upload_url: str = "",
         run_url: str = "",
         authorization: str = "",
+        access_key: str = "",
+        secret_key: str = "",
+        x_authorization: str = "",
         app_id: str = "",
         department_id: str = "",
         mock_result_path: str = "",
@@ -34,10 +38,45 @@ class DocOCRClient:
         self.conversation_url = conversation_url
         self.upload_url = upload_url
         self.run_url = run_url
-        self.authorization = authorization
+        self.authorization = self._normalize_authorization(authorization)
+        self.access_key = access_key
+        self.secret_key = secret_key
+        self.x_authorization = x_authorization
         self.app_id = app_id
         self.department_id = department_id
         self.mock_result_path = mock_result_path
+
+    @staticmethod
+    def _normalize_authorization(value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            return ""
+        if value.lower().startswith("bearer "):
+            return value
+        return f"Bearer {value}"
+
+    def _default_url(self, path: str) -> str:
+        base = self.base_url.rstrip("/")
+        return f"{base}{path}" if base else path
+
+    def _json_headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": self.authorization,
+        }
+        if self.x_authorization:
+            headers["X-Authorization"] = self.x_authorization
+        return headers
+
+    def _upload_headers(self) -> dict[str, str]:
+        headers = build_ab_token_headers(
+            access_key=self.access_key,
+            secret_key=self.secret_key,
+            content_type="multipart/form-data",
+        )
+        if self.x_authorization:
+            headers["X-Authorization"] = self.x_authorization
+        return headers
 
     def _load_mock_result(self) -> AgentResult:
         mock_path = Path(self.mock_result_path).expanduser()
@@ -114,9 +153,9 @@ class DocOCRClient:
         真实对接：创建会话 -> 上传文件 -> 触发运行
         参数均可变，留空时返回错误，由上层注入。
         """
-        conversation_url = self.conversation_url or f"{self.base_url}/v2/app/conversation"
-        upload_url = self.upload_url or f"{self.base_url}/v2/app/conversation/file/upload"
-        run_url = self.run_url or f"{self.base_url}/v2/app/conversation/runs"
+        conversation_url = self.conversation_url or self._default_url("/api/ai_apaas/v1/app/conversation")
+        upload_url = self.upload_url or self._default_url("/api/ai_apaas/v1/app/conversation/file/upload")
+        run_url = self.run_url or self._default_url("/api/ai_apaas/v1/app/conversation/runs")
         logger.info(
             {
                 "event": "doc_ocr_real.config",
@@ -124,6 +163,8 @@ class DocOCRClient:
                 "upload_url": upload_url,
                 "run_url": run_url,
                 "has_authorization": bool(self.authorization),
+                "has_access_key": bool(self.access_key),
+                "has_secret_key": bool(self.secret_key),
                 "has_app_id": bool(self.app_id),
             }
         )
@@ -132,14 +173,12 @@ class DocOCRClient:
             return AgentResult(ok=False, data={}, error="Agent URLs are not configured")
         if not self.authorization:
             return AgentResult(ok=False, data={}, error="Agent authorization is not configured")
+        if not self.access_key or not self.secret_key:
+            return AgentResult(ok=False, data={}, error="Agent access_key/secret_key is not configured")
         if not self.app_id:
             return AgentResult(ok=False, data={}, error="Agent app_id is not configured")
 
-        headers_json = {
-            "Content-Type": "application/json",
-            "Authorization": self.authorization,
-        }
-        headers_auth = {"Authorization": self.authorization}
+        headers_json = self._json_headers()
 
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -163,7 +202,7 @@ class DocOCRClient:
                     }
                     if self.department_id:
                         form_data["department_id"] = str(self.department_id)
-                    upload_resp = await client.post(upload_url, headers=headers_auth, data=form_data, files=files)
+                    upload_resp = await client.post(upload_url, headers=self._upload_headers(), data=form_data, files=files)
                 upload_resp.raise_for_status()
                 file_id = upload_resp.json().get("id")
                 if not file_id:
@@ -197,9 +236,9 @@ class DocOCRClient:
         真实对接：创建会话 -> 逐个上传文件 -> 触发运行（携带多个 file_ids）
         参数均可变，留空时返回错误，由上层注入。
         """
-        conversation_url = self.conversation_url or f"{self.base_url}/v2/app/conversation"
-        upload_url = self.upload_url or f"{self.base_url}/v2/app/conversation/file/upload"
-        run_url = self.run_url or f"{self.base_url}/v2/app/conversation/runs"
+        conversation_url = self.conversation_url or self._default_url("/api/ai_apaas/v1/app/conversation")
+        upload_url = self.upload_url or self._default_url("/api/ai_apaas/v1/app/conversation/file/upload")
+        run_url = self.run_url or self._default_url("/api/ai_apaas/v1/app/conversation/runs")
         logger.info(
             {
                 "event": "doc_ocr_real_many.config",
@@ -207,6 +246,8 @@ class DocOCRClient:
                 "upload_url": upload_url,
                 "run_url": run_url,
                 "has_authorization": bool(self.authorization),
+                "has_access_key": bool(self.access_key),
+                "has_secret_key": bool(self.secret_key),
                 "has_app_id": bool(self.app_id),
                 "file_count": len(local_file_paths or []),
             }
@@ -216,16 +257,14 @@ class DocOCRClient:
             return AgentResult(ok=False, data={}, error="Agent URLs are not configured")
         if not self.authorization:
             return AgentResult(ok=False, data={}, error="Agent authorization is not configured")
+        if not self.access_key or not self.secret_key:
+            return AgentResult(ok=False, data={}, error="Agent access_key/secret_key is not configured")
         if not self.app_id:
             return AgentResult(ok=False, data={}, error="Agent app_id is not configured")
         if not local_file_paths:
             return AgentResult(ok=False, data={}, error="No local files provided")
 
-        headers_json = {
-            "Content-Type": "application/json",
-            "Authorization": self.authorization,
-        }
-        headers_auth = {"Authorization": self.authorization}
+        headers_json = self._json_headers()
 
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -249,7 +288,7 @@ class DocOCRClient:
                         }
                         if self.department_id:
                             form_data["department_id"] = str(self.department_id)
-                        upload_resp = await client.post(upload_url, headers=headers_auth, data=form_data, files=files)
+                        upload_resp = await client.post(upload_url, headers=self._upload_headers(), data=form_data, files=files)
                     upload_resp.raise_for_status()
                     file_id = upload_resp.json().get("id")
                     if not file_id:

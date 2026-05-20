@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 from ...core.context import AgentExecutionContext
 from ...schemas.common import AgentResult
+from ...config import settings
 from ...services.file_stage import StagedFile, download_to_staging
 from .client import DocOCRClient
 from .schema import DocOCRReq
@@ -12,8 +13,16 @@ from .schema import DocOCRReq
 
 def build_doc_ocr_client(agent_cfg: dict) -> DocOCRClient:
     def _cfg(*keys: str) -> str:
+        query = agent_cfg.get("query", {}) if isinstance(agent_cfg.get("query"), dict) else {}
+        headers = agent_cfg.get("headers", {}) if isinstance(agent_cfg.get("headers"), dict) else {}
         for key in keys:
             value = agent_cfg.get(key)
+            if isinstance(value, str) and value:
+                return value
+            value = query.get(key)
+            if isinstance(value, str) and value:
+                return value
+            value = headers.get(key)
             if isinstance(value, str) and value:
                 return value
         return ""
@@ -23,7 +32,10 @@ def build_doc_ocr_client(agent_cfg: dict) -> DocOCRClient:
         conversation_url=_cfg("conversation_url"),
         upload_url=_cfg("upload_url"),
         run_url=_cfg("run_url"),
-        authorization=_cfg("authorization", "private_key", "secret"),
+        authorization=_cfg("api_key", "authorization"),
+        access_key=_cfg("access_key", "ak", "Access-Key") or settings.AB_ACCESS_KEY,
+        secret_key=_cfg("secret_key", "sk", "Secret-Key") or settings.AB_SECRET_KEY,
+        x_authorization=_cfg("x_authorization", "X-Authorization"),
         app_id=_cfg("app_id", "appId"),
         department_id=_cfg("department_id", "departmentId"),
         mock_result_path=_cfg("mock_result_file"),

@@ -8,11 +8,18 @@ agents:
     conversation_url: ""
     upload_url: ""
     run_url: ""
+    # API Key is used by conversation and conversation/runs.
+    api_key: "your_api_key"
+    # AK/SK service signature is used by conversation/file/upload.
+    access_key: "your_access_key"
+    secret_key: "your_secret_key"
+    x_authorization: ""
     query:
       app_id: "your_app_id"
       department_id: "your_department_id"
+    # These headers are only used by callbacks/gateway forwarding.
+    # They are not automatically sent to the AB agent API calls above.
     headers:
-      X-Private-Key: "your_private_key"
       channel: "your_channel"
     mock_enabled: true
     mock_result_file: "app/agents/doc_ocr/mock_result.json"
