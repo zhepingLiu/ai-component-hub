@@ -155,6 +155,7 @@ def update_log_level(payload: LogLevelPayload):
         },
     }
 
+
 @app.get("/routes/reload")
 async def reload_routes():
     routes = await _routes_or_503()
@@ -172,7 +173,8 @@ async def register(ep: RouteEntry):
 
 @limiter.limit("60/minute")
 @app.api_route(f"{settings.API_PREFIX}" + "/{category}/{action}", methods=["GET","POST"])
-async def proxy(category: str, action: str, request: Request):
+@app.api_route(f"{settings.API_PREFIX}" + "/{category}/{action}/{path:path}", methods=["GET","POST"])
+async def proxy(category: str, action: str, request: Request, path: str = ""):
     routes = await _routes_or_503()
     target = await asyncio.to_thread(routes.resolve, category, action)
     if not target:
@@ -186,6 +188,8 @@ async def proxy(category: str, action: str, request: Request):
             }
         )
         raise HTTPException(status_code=404, detail="component_not_found")
+    if path:
+        target = f"{target.rstrip('/')}/{path.lstrip('/')}"
 
     key = request.headers.get("X-Api-Key", "")
     if settings.GW_API_KEY and key != settings.GW_API_KEY:

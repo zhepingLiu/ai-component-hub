@@ -17,6 +17,8 @@ from .services.staging_cleanup import run_staging_cleanup_loop
 
 from .routers.agent_gateway import router as agent_gateway_router
 from .routers.agent_runner import router as agent_runner_router
+from .routers.batches import router as batches_router
+from .batch.definitions import build_batch_registry
 
 setup_logging(
     service_name="orchestrator",
@@ -34,6 +36,13 @@ async def register_to_gateway():
         agents=agent_configs,
         base_url=settings.ORCHESTRATOR_BASE_URL,
         category=settings.GATEWAY_CATEGORY,
+    )
+    endpoints.append(
+        {
+            "category": settings.BATCH_GATEWAY_CATEGORY,
+            "action": settings.BATCH_GATEWAY_ACTION,
+            "url": f"{settings.ORCHESTRATOR_BASE_URL.rstrip('/')}/batches",
+        }
     )
     headers = {"X-Api-Key": settings.GW_API_KEY} if settings.GW_API_KEY else {}
 
@@ -123,6 +132,7 @@ async def lifespan(app: FastAPI):
     app.state.agent_queues = {}
     app.state.staging_cleanup_task = None
     app.state.staging_cleanup_stop_event = asyncio.Event()
+    app.state.batch_registry = build_batch_registry()
 
     app.state.agent_configs = load_agent_configs(settings.AGENT_CONFIG_FILE)
     if app.state.agent_configs:
@@ -200,6 +210,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, tags=["health"])
     app.include_router(agent_gateway_router, tags=["agents"])
     app.include_router(agent_runner_router, tags=["agents"])
+    app.include_router(batches_router, tags=["batches"])
 
     return app
 

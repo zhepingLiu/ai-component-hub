@@ -29,12 +29,14 @@ async def health(request: Request):
 
     queues = getattr(request.app.state, "agent_queues", {}) or {}
     queue_stats = {name: await queue.snapshot() for name, queue in queues.items()}
+    batch_registry = getattr(request.app.state, "batch_registry", None)
     return {
         "status": "ok",
         "service": "orchestrator",
         "redis": redis_ok,
         "agents": queue_stats,
         "doc_ocr": queue_stats.get("doc-ocr"),
+        "batch_types": batch_registry.list_types() if batch_registry else [],
     }
 
 

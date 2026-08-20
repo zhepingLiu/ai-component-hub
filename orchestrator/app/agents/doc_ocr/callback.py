@@ -49,7 +49,8 @@ def build_doc_ocr_callback_xml(
     _append_children(rh, _REQUEST_HEADER_KEYS, request_header)
     rb = ET.SubElement(req, "RequestBody")
     _append_children(rb, _REQUEST_BODY_KEYS, request_body)
-    return ET.tostring(envelope, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    envelope_xml = ET.tostring(envelope, encoding="unicode")
+    return f"<?xml version='1.0' encoding='utf8'?>{envelope_xml}"
 
 
 async def send_doc_ocr_callback(

@@ -52,7 +52,9 @@ services:
       - ./data/esb:/app/data
 
   orchestrator:
-    build: ./orchestrator
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -60,8 +62,45 @@ services:
       - STAGING_DIR=/app/data/staging
       - DOC_OCR_CONSUMERS=3
       - DOC_OCR_QUEUE_SIZE=100
+      - BATCH_REDIS_KEY_PREFIX=aihub:batch
       - AB_ACCESS_KEY=${AB_ACCESS_KEY:-}
       - AB_SECRET_KEY=${AB_SECRET_KEY:-}
+    volumes:
+      - ./data/orchestrator:/app/data
+      - ./data/orchestrator-root/logs:/app/root/logs
+    networks:
+      - ai-net
+    depends_on:
+      - redis
+
+  batch-coordinator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    command: python -m app.batch.coordinator
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BATCH_REDIS_KEY_PREFIX=aihub:batch
+      - BATCH_COORDINATOR_CONCURRENCY=4
+    volumes:
+      - ./data/orchestrator:/app/data
+      - ./data/orchestrator-root/logs:/app/root/logs
+    networks:
+      - ai-net
+    depends_on:
+      - redis
+
+  batch-worker:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    command: python -m app.batch.worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BATCH_REDIS_KEY_PREFIX=aihub:batch
+      - BATCH_WORKER_CONCURRENCY=4
     volumes:
       - ./data/orchestrator:/app/data
       - ./data/orchestrator-root/logs:/app/root/logs

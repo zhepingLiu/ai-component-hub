@@ -24,3 +24,25 @@ agents:
     mock_enabled: true
     mock_result_file: "app/agents/doc_ocr/mock_result.json"
     use_real: true
+
+  # Generic agent template for future services.
+  # Copy this block, uncomment it, and replace the action/name and credentials.
+  # some-agent:
+  #   handler: generic_agent
+  #   gateway_action: some-agent
+  #   enable_register: true
+  #   base_url: http://agent-platform:7002
+  #   callback_url: http://callback-host/callback
+  #   conversation_url: ""
+  #   upload_url: ""
+  #   run_url: ""
+  #   api_key: "your_api_key"
+  #   access_key: "your_access_key"
+  #   secret_key: "your_secret_key"
+  #   x_authorization: ""
+  #   query:
+  #     app_id: "your_app_id"
+  #     department_id: "your_department_id"
+  #   headers:
+  #     channel: "your_channel"
+  #   use_real: true
