@@ -101,6 +101,7 @@ services:
       - REDIS_PORT=6379
       - BATCH_REDIS_KEY_PREFIX=aihub:batch
       - BATCH_WORKER_CONCURRENCY=4
+      - BATCH_AGENT_BASE_URL=http://orchestrator:7010
     volumes:
       - ./data/orchestrator:/app/data
       - ./data/orchestrator-root/logs:/app/root/logs

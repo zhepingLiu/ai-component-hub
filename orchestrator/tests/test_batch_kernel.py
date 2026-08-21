@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from collections import defaultdict
 from contextlib import nullcontext
 from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 fake_config = ModuleType("app.config")
 fake_config.settings = SimpleNamespace(
@@ -14,19 +15,37 @@ fake_config.settings = SimpleNamespace(
     BATCH_REDIS_KEY_PREFIX="test:batch",
     BATCH_RETENTION_SEC=3600,
     BATCH_WORKER_CONCURRENCY=1,
+    BATCH_AGENT_BASE_URL="http://orchestrator:7010",
+    ORCHESTRATOR_BASE_URL="http://orchestrator:7010",
+    REQUEST_TIMEOUT_SEC=15.0,
+    AGENT_CONFIG_FILE="/app/agents.yaml",
 )
 sys.modules.setdefault("app.config", fake_config)
 fake_redis_client = ModuleType("app.redis_client")
 fake_redis_client.create_redis_client = lambda: None
 sys.modules.setdefault("app.redis_client", fake_redis_client)
+fake_httpx = ModuleType("httpx")
+fake_httpx.AsyncClient = object
+fake_httpx.Response = object
+fake_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
+fake_httpx.RequestError = type("RequestError", (Exception,), {})
+sys.modules.setdefault("httpx", fake_httpx)
+fake_yaml = ModuleType("yaml")
+fake_yaml.safe_load = lambda value: {}
+sys.modules.setdefault("yaml", fake_yaml)
 
 from app.batch.coordinator import BatchCoordinator
-from app.batch.definitions import build_batch_registry
+from app.batch.definitions import AgentBatchDefinition, build_batch_registry
 from app.batch.models import BatchOptions, BatchStatus, TaskStatus
-from app.batch.results import TaskExecutionResult
+from app.batch.results import TaskExecutionResult, TaskResultKind
 from app.batch.service import BatchService
 from app.batch.store import RedisBatchStore
 from app.batch.worker import BatchWorker
+
+# Keep lightweight dependency stubs local to this test module. Imported batch
+# modules retain their references, while later test modules can load real deps.
+for _module_name in ("app.config", "app.redis_client", "httpx", "yaml"):
+    sys.modules.pop(_module_name, None)
 
 
 class FakeRedis:
@@ -241,6 +260,77 @@ class BatchKernelTests(unittest.IsolatedAsyncioTestCase):
             self.redis.zsets[self.store.scheduled_batches_key][batch.batch_id],
             updated.timestamp(),
         )
+
+    async def test_agent_batch_calls_registered_agent_and_polls_result(self) -> None:
+        class FakeResponse:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+                self.text = str(payload)
+
+            def json(self):
+                return self._payload
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                self.post_payload = None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, *, json, headers):
+                self.post_payload = json
+                return FakeResponse(202, {"request_id": json["request_id"], "status": "QUEUED"})
+
+            async def get(self, url, *, params, headers):
+                return FakeResponse(
+                    200,
+                    {
+                        "request_id": params["request_id"],
+                        "status": "SUCCEEDED",
+                        "result": {"answer": "ok"},
+                    },
+                )
+
+        definition = AgentBatchDefinition()
+        ctx = SimpleNamespace(
+            batch=SimpleNamespace(batch_id="bat-1"),
+            settings=SimpleNamespace(REQUEST_TIMEOUT_SEC=15.0),
+        )
+        task = SimpleNamespace(
+            business_key="customer-1",
+            payload={"request": {"inputs": {"customer_id": "1"}}},
+            error_code=None,
+            attempt=1,
+        )
+        runtime_context = {
+            "agent_name": "kehutong_secretary",
+            "agent_url": "http://orchestrator:7010/agents/kehutong_secretary",
+            "poll_interval_seconds": 0,
+        }
+
+        with patch("app.batch.definitions.httpx.AsyncClient", FakeClient):
+            result = await definition.execute_task(ctx, task, runtime_context)
+
+        self.assertEqual(result.kind, TaskResultKind.SUCCEEDED)
+        self.assertEqual(result.output["result"], {"answer": "ok"})
+        self.assertEqual(result.output["agent_request_id"], "bat-1:customer-1")
+
+    async def test_agent_batch_requires_internal_registered_name(self) -> None:
+        definition = AgentBatchDefinition()
+        payload = {
+            "agent_name": "kehutong_secretary",
+            "items": [{"business_key": "1", "request": {"inputs": {}}}],
+        }
+        with patch(
+            "app.batch.definitions.load_agent_configs",
+            return_value={"kehutong_secretary": {"gateway_action": "kehutong-secretary"}},
+        ):
+            validated = await definition.validate_input(payload)
+        self.assertEqual(validated["agent_name"], "kehutong_secretary")
 
 
 if __name__ == "__main__":

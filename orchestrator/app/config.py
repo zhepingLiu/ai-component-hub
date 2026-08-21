@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     BATCH_COORDINATOR_CONCURRENCY: int = int(os.getenv("BATCH_COORDINATOR_CONCURRENCY", "4"))
     BATCH_MAINTENANCE_INTERVAL_SEC: float = float(os.getenv("BATCH_MAINTENANCE_INTERVAL_SEC", "1.0"))
     BATCH_REDIS_RETRY_SEC: float = float(os.getenv("BATCH_REDIS_RETRY_SEC", "2.0"))
+    BATCH_AGENT_BASE_URL: str = os.getenv("BATCH_AGENT_BASE_URL", "")
 
     # staging 目录（容器内可写路径）
     STAGING_DIR: str = os.getenv("STAGING_DIR", "/app/data/staging")
