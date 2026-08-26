@@ -46,3 +46,48 @@ agents:
   #   headers:
   #     channel: "your_channel"
   #   use_real: true
+
+  # Durable customer fan-out agent. The agent inherits BatchAgent; every
+  # customer becomes a Redis-backed task with retry and resume support.
+  # kehutong_secretary:
+  #   handler: kehutong_secretary
+  #   gateway_action: kehutong-secretary
+  #   enable_register: true
+  #   customer_provider:
+  #     type: http
+  #     timeout_seconds: 30
+  #     headers:
+  #       X-Api-Key: replace-me
+  #     retryable_status_codes: [408, 429, 500, 502, 503, 504]
+  #     customer_list_api:
+  #       url: http://customer-service/customer/list
+  #       method: POST
+  #       static_body:
+  #         status: active
+  #       response:
+  #         customer_ids_path: data.customerIds
+  #     customer_data_api:
+  #       url: http://customer-service/customer/data
+  #       method: POST
+  #       customer_id:
+  #         location: body
+  #         field: customerId
+  #       static_body:
+  #         includeHistory: true
+  #       response:
+  #         customer_data_path: data
+  #   agent_customer_id_field: customerId
+  #   agent_customer_data_field: customerData
+  #   agent_batch_request_id_field: batchRequestId
+  #   result_server_path: http://file-server/internal-upload-path
+  #   result_public_base_url: http://file-server/public/results
+  #   result_subdir: kehutong_secretary
+  #   target_agent:
+  #     base_url: http://agent-platform:7002
+  #     api_key: replace-me
+  #     access_key: replace-me
+  #     secret_key: replace-me
+  #     query:
+  #       app_id: replace-me
+  #       department_id: replace-me
+  #   callback_url: ""

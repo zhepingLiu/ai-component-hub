@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from collections import defaultdict
 from contextlib import nullcontext
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 fake_config = ModuleType("app.config")
 fake_config.settings = SimpleNamespace(
@@ -172,6 +172,68 @@ class BatchKernelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed.status, BatchStatus.SUCCEEDED)
         self.assertEqual(completed.succeeded, 2)
         self.assertEqual(completed.result, {"total": 2, "succeeded": 2, "failed": 0})
+
+    async def test_prepare_phase_is_retried_without_losing_batch(self) -> None:
+        options = BatchOptions(
+            prepare_max_attempts=2,
+            prepare_retry_delays_seconds=[0],
+        )
+        batch, _ = await self._create([{"id": "a"}], options=options)
+        definition = self.registry.get("echo_batch")
+        coordinator = BatchCoordinator(self.store, self.registry)
+
+        with patch.object(
+            definition,
+            "prepare",
+            AsyncMock(side_effect=[RuntimeError("list API unavailable"), {}]),
+        ):
+            await coordinator.handle("prepare", batch.batch_id)
+            waiting = await self.store.get_batch(batch.batch_id)
+            self.assertEqual(waiting.status, BatchStatus.PREPARING)
+            self.assertEqual(waiting.prepare_attempt, 1)
+
+            self.assertEqual(await self.store.promote_due_commands(), 1)
+            await coordinator.handle("prepare", batch.batch_id)
+
+        resumed = await self.store.get_batch(batch.batch_id)
+        self.assertEqual(resumed.status, BatchStatus.RUNNING)
+        self.assertEqual(resumed.prepare_attempt, 2)
+        self.assertEqual(resumed.total, 1)
+
+    async def test_finalize_phase_is_retried_without_rerunning_tasks(self) -> None:
+        options = BatchOptions(
+            finalize_max_attempts=2,
+            finalize_retry_delays_seconds=[0],
+        )
+        batch, _ = await self._create([{"id": "a"}], options=options)
+        coordinator = BatchCoordinator(self.store, self.registry)
+        await coordinator.handle("prepare", batch.batch_id)
+        task = await self.store.claim_task("worker", timeout=0)
+        await BatchWorker(self.store, self.registry, worker_id="worker")._execute(task.task_id)
+        definition = self.registry.get("echo_batch")
+
+        with patch.object(
+            definition,
+            "finalize",
+            AsyncMock(
+                side_effect=[
+                    RuntimeError("file server unavailable"),
+                    {"total": 1, "succeeded": 1, "failed": 0},
+                ]
+            ),
+        ):
+            await coordinator.handle("finalize", batch.batch_id)
+            waiting = await self.store.get_batch(batch.batch_id)
+            self.assertEqual(waiting.status, BatchStatus.FINALIZING)
+            self.assertEqual(waiting.finalize_attempt, 1)
+
+            self.assertEqual(await self.store.promote_due_commands(), 1)
+            await coordinator.handle("finalize", batch.batch_id)
+
+        completed = await self.store.get_batch(batch.batch_id)
+        self.assertEqual(completed.status, BatchStatus.SUCCEEDED)
+        self.assertEqual(completed.finalize_attempt, 2)
+        self.assertEqual(completed.succeeded, 1)
 
     async def test_idempotency_key_returns_original_batch(self) -> None:
         first, first_created = await self._create([1], idempotency_key="same-request")

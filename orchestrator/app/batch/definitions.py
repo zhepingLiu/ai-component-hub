@@ -195,7 +195,10 @@ class AgentBatchDefinition(BaseBatchDefinition):
 
 
 def build_batch_registry() -> BatchDefinitionRegistry:
+    from ..agents.kehutong_secretary.definition import KehutongSecretaryBatchDefinition
+
     registry = BatchDefinitionRegistry()
     registry.register(EchoBatchDefinition())
     registry.register(AgentBatchDefinition())
+    registry.register(KehutongSecretaryBatchDefinition())
     return registry

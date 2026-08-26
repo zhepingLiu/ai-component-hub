@@ -79,6 +79,10 @@ class RedisBatchStore:
     def scheduled_batches_key(self) -> str:
         return self._key("schedule", "batches")
 
+    @property
+    def command_retry_key(self) -> str:
+        return self._key("schedule", "commands")
+
     async def create_batch(
         self,
         *,
@@ -305,6 +309,53 @@ class RedisBatchStore:
 
     def _enqueue_command(self, action: str, batch_id: str) -> None:
         self.r.lpush(self.command_queue_key, json.dumps({"action": action, "batch_id": batch_id}))
+
+    async def begin_phase_attempt(self, batch_id: str, phase: str) -> BatchRecord:
+        return await asyncio.to_thread(self._begin_phase_attempt, batch_id, phase)
+
+    def _begin_phase_attempt(self, batch_id: str, phase: str) -> BatchRecord:
+        field = f"{phase}_attempt"
+        if field not in {"prepare_attempt", "finalize_attempt"}:
+            raise ValueError(f"unsupported batch phase: {phase}")
+        with self._lock(batch_id):
+            batch = self._get_batch(batch_id)
+            if not batch:
+                raise KeyError(batch_id)
+            setattr(batch, field, int(getattr(batch, field)) + 1)
+            self._save_batch(batch)
+            return batch
+
+    async def schedule_command_retry(
+        self,
+        action: str,
+        batch_id: str,
+        *,
+        delay_seconds: int,
+    ) -> None:
+        await asyncio.to_thread(
+            self.r.zadd,
+            self.command_retry_key,
+            {json.dumps({"action": action, "batch_id": batch_id}, sort_keys=True): time.time() + delay_seconds},
+        )
+
+    async def promote_due_commands(self, limit: int = 100) -> int:
+        return await asyncio.to_thread(self._promote_due_commands, limit)
+
+    def _promote_due_commands(self, limit: int) -> int:
+        commands = self.r.zrangebyscore(
+            self.command_retry_key,
+            "-inf",
+            time.time(),
+            start=0,
+            num=limit,
+        )
+        moved = 0
+        for command in commands:
+            if not self.r.zrem(self.command_retry_key, command):
+                continue
+            self.r.lpush(self.command_queue_key, command)
+            moved += 1
+        return moved
 
     async def dequeue_command(self, timeout: int = 1) -> dict[str, str] | None:
         raw = await asyncio.to_thread(

@@ -37,6 +37,14 @@ class BatchOptions(BaseModel):
     retry_delays_seconds: list[Annotated[int, Field(ge=0, le=86400)]] = Field(
         default_factory=lambda: [60, 300, 1200]
     )
+    prepare_max_attempts: int = Field(default=3, ge=1, le=10)
+    prepare_retry_delays_seconds: list[Annotated[int, Field(ge=0, le=86400)]] = Field(
+        default_factory=lambda: [30, 120, 600]
+    )
+    finalize_max_attempts: int = Field(default=5, ge=1, le=10)
+    finalize_retry_delays_seconds: list[Annotated[int, Field(ge=0, le=86400)]] = Field(
+        default_factory=lambda: [30, 120, 300, 900]
+    )
 
 
 class BatchRecord(BaseModel):
@@ -56,6 +64,8 @@ class BatchRecord(BaseModel):
     failed: int = 0
     cancelled: int = 0
     generation_complete: bool = False
+    prepare_attempt: int = 0
+    finalize_attempt: int = 0
     resume_status: BatchStatus | None = None
     error: str | None = None
     created_at: str

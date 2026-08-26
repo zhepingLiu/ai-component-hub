@@ -58,6 +58,7 @@ class BatchCoordinator:
         while True:
             try:
                 await self.store.promote_due_batches()
+                await self.store.promote_due_commands()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -84,6 +85,8 @@ class BatchCoordinator:
             await self._finalize(batch_id)
         elif action == "cleanup":
             await self._cleanup(batch_id)
+        elif action == "notify":
+            await self._notify(batch_id)
         else:
             logger.warning({"event": "batch.command.unknown", "action": action, "batch_id": batch_id})
 
@@ -102,6 +105,8 @@ class BatchCoordinator:
         definition = self.registry.get(batch.batch_type, batch.definition_version)
         ctx = BatchContext(batch=batch, settings=settings, logger=logger)
         try:
+            batch = await self.store.begin_phase_attempt(batch_id, "prepare")
+            ctx = BatchContext(batch=batch, settings=settings, logger=logger)
             if batch.status == BatchStatus.PREPARING:
                 runtime_context = await definition.prepare(ctx, batch.input)
                 await self.store.set_runtime_context(batch_id, runtime_context or {})
@@ -121,6 +126,17 @@ class BatchCoordinator:
             logger.info({"event": "batch.tasks.generated", "batch_id": batch_id})
         except Exception as exc:
             logger.exception({"event": "batch.prepare.failed", "batch_id": batch_id, "error": str(exc)})
+            current = await self.store.get_batch(batch_id)
+            if current and current.prepare_attempt < current.options.prepare_max_attempts:
+                await self.store.schedule_command_retry(
+                    "prepare",
+                    batch_id,
+                    delay_seconds=self._phase_retry_delay(
+                        current.options.prepare_retry_delays_seconds,
+                        current.prepare_attempt,
+                    ),
+                )
+                return
             await self.store.transition_batch(
                 batch_id,
                 expected={BatchStatus.PREPARING, BatchStatus.GENERATING_TASKS, BatchStatus.RUNNING},
@@ -128,6 +144,7 @@ class BatchCoordinator:
                 error=str(exc),
             )
             await self._cleanup(batch_id)
+            await self._notify(batch_id)
 
     async def _finalize(self, batch_id: str) -> None:
         existing = await self.store.get_batch(batch_id)
@@ -135,15 +152,29 @@ class BatchCoordinator:
         if not batch:
             return
         definition = self.registry.get(batch.batch_type, batch.definition_version)
+        batch = await self.store.begin_phase_attempt(batch_id, "finalize")
         ctx = BatchContext(batch=batch, settings=settings, logger=logger)
         try:
             result = await definition.finalize(ctx)
             await definition.cleanup(ctx)
-            await self.store.finish_finalize(batch_id, result=result)
+            finished = await self.store.finish_finalize(batch_id, result=result)
+            await self._notify(finished.batch_id)
             logger.info({"event": "batch.finalized", "batch_id": batch_id})
         except Exception as exc:
             logger.exception({"event": "batch.finalize.failed", "batch_id": batch_id, "error": str(exc)})
-            await self.store.finish_finalize(batch_id, error=str(exc))
+            current = await self.store.get_batch(batch_id)
+            if current and current.finalize_attempt < current.options.finalize_max_attempts:
+                await self.store.schedule_command_retry(
+                    "finalize",
+                    batch_id,
+                    delay_seconds=self._phase_retry_delay(
+                        current.options.finalize_retry_delays_seconds,
+                        current.finalize_attempt,
+                    ),
+                )
+                return
+            failed = await self.store.finish_finalize(batch_id, error=str(exc))
+            await self._notify(failed.batch_id)
 
     async def _cleanup(self, batch_id: str) -> None:
         batch = await self.store.get_batch(batch_id)
@@ -154,6 +185,27 @@ class BatchCoordinator:
             await definition.cleanup(BatchContext(batch=batch, settings=settings, logger=logger))
         except Exception as exc:
             logger.exception({"event": "batch.cleanup.failed", "batch_id": batch_id, "error": str(exc)})
+
+    async def _notify(self, batch_id: str) -> None:
+        batch = await self.store.get_batch(batch_id)
+        if not batch:
+            return
+        definition = self.registry.get(batch.batch_type, batch.definition_version)
+        ctx = BatchContext(batch=batch, settings=settings, logger=logger)
+        try:
+            if batch.status in {BatchStatus.SUCCEEDED, BatchStatus.PARTIAL_FAILED}:
+                await definition.on_batch_finished(ctx)
+            elif batch.status == BatchStatus.FAILED:
+                await definition.on_batch_failed(ctx, batch.error or "batch failed")
+        except Exception as exc:
+            logger.exception({"event": "batch.notify.failed", "batch_id": batch_id, "error": str(exc)})
+            await self.store.schedule_command_retry("notify", batch_id, delay_seconds=60)
+
+    @staticmethod
+    def _phase_retry_delay(delays: list[int], attempt: int) -> int:
+        if not delays:
+            return 60
+        return max(0, delays[min(max(attempt, 1) - 1, len(delays) - 1)])
 
 
 async def main() -> None:

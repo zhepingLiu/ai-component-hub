@@ -53,3 +53,9 @@ class BaseBatchDefinition(ABC):
 
     async def cleanup(self, ctx: BatchContext) -> None:
         return None
+
+    async def on_batch_finished(self, ctx: BatchContext) -> None:
+        """Notify an owning system after the terminal record has been persisted."""
+
+    async def on_batch_failed(self, ctx: BatchContext, error: str) -> None:
+        """Notify an owning system when a non-task batch phase is permanently failed."""
