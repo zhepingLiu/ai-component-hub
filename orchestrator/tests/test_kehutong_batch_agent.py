@@ -4,9 +4,11 @@ import sys
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 fake_config = ModuleType("app.config")
 fake_config.Settings = object
@@ -28,8 +30,10 @@ sys.modules.setdefault("yaml", fake_yaml)
 from app.agents.batch_agent.agent import BatchAgent
 from app.agents.kehutong_secretary.agent import KehutongSecretaryAgent
 from app.agents.kehutong_secretary import client as client_module
+from app.agents.kehutong_secretary import definition as definition_module
 from app.agents.kehutong_secretary import result_delivery as delivery_module
 from app.agents.kehutong_secretary.client import HttpCustomerDataProvider
+from app.agents.kehutong_secretary.definition import KehutongSecretaryBatchDefinition
 from app.agents.kehutong_secretary.schema import CustomerProviderConfig, KehutongSecretaryReq
 from app.agents.kehutong_secretary.result_delivery import publish_kehutong_result
 from app.batch.models import BatchOptions, BatchStatus, TaskStatus
@@ -64,10 +68,14 @@ class FakeAsyncClient:
 
     async def post(self, url, **kwargs):
         self.calls.append({"method": "POST", "url": url, **kwargs})
+        if isinstance(self.responses, dict):
+            return self.responses[url].pop(0)
         return self.responses.pop(0)
 
     async def get(self, url, **kwargs):
         self.calls.append({"method": "GET", "url": url, **kwargs})
+        if isinstance(self.responses, dict):
+            return self.responses[url].pop(0)
         return self.responses.pop(0)
 
 
@@ -89,43 +97,187 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(issubclass(KehutongSecretaryAgent, BatchAgent))
         self.assertEqual(KehutongSecretaryAgent.batch_type, "kehutong_secretary")
 
-    async def test_http_provider_reads_both_configured_apis(self):
+    def test_minimal_request_defaults_options_and_business_date(self):
+        req = KehutongSecretaryReq.model_validate({"request_id": "req-minimal"})
+
+        self.assertEqual(req.options.batch, BatchOptions())
+        self.assertEqual(req.inputs.customer_list_request.last_cust_no, "0")
+        self.assertEqual(req.inputs.customer_list_request.pageSize, 50)
+        self.assertEqual(
+            req.inputs.customer_data_request.dataDate,
+            datetime.now(ZoneInfo("Asia/Shanghai")).date(),
+        )
+
+    async def test_http_provider_reads_one_customer_page_and_aggregates_customer_data(self):
         config = CustomerProviderConfig.model_validate(
             {
                 "headers": {"X-Api-Key": "secret"},
                 "customer_list_api": {
                     "url": "http://customer/list",
                     "method": "POST",
-                    "static_body": {"status": "active"},
-                    "response": {"customer_ids_path": "data.customerIds"},
                 },
-                "customer_data_api": {
-                    "url": "http://customer/data",
+                "chat_messages_api": {
+                    "url": "http://customer/chat-messages",
                     "method": "POST",
-                    "customer_id": {"location": "body", "field": "customerId"},
-                    "response": {"customer_data_path": "data"},
+                },
+                "follow_plan_api": {
+                    "url": "http://customer/follow-plan",
+                    "method": "POST",
                 },
             }
         )
         provider = HttpCustomerDataProvider(config)
-        FakeAsyncClient.responses = [
-            FakeResponse({"data": {"customerIds": [1001, "1002"]}}),
-            FakeResponse({"data": {"score": 88}}),
-        ]
+        FakeAsyncClient.responses = {
+            "http://customer/list": [
+                FakeResponse(
+                    {
+                        "data": [{"cust_no": 1001}, {"cust_no": "1002"}],
+                        "stateCode": "0000",
+                        "message": "success",
+                    }
+                )
+            ],
+            "http://customer/follow-plan": [
+                FakeResponse(
+                    {
+                        "data": [{"title": "call customer", "target_type": "customer"}],
+                        "stateCode": "0000",
+                    }
+                )
+            ],
+            "http://customer/chat-messages": [
+                FakeResponse(
+                    {
+                        "data": {
+                            "rows": [{"content": "first"}, {"content": "second"}],
+                            "totalNum": 3,
+                            "pageSize": 2000,
+                            "pageNum": 1,
+                        },
+                        "stateCode": "0000",
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "data": {
+                            "rows": [{"content": "third"}],
+                            "totalNum": 3,
+                            "pageSize": 2000,
+                            "pageNum": 2,
+                        },
+                        "stateCode": "0000",
+                    }
+                ),
+            ],
+        }
         with patch.object(client_module.httpx, "AsyncClient", FakeAsyncClient):
-            ids = await provider.list_customer_ids({"segment": "A"})
-            data = await provider.get_customer_data("1001", {"date": "2026-08-26"})
+            ids = await provider.list_customer_ids(
+                {"last_cust_no": "1000", "pageSize": 50}
+            )
+            data = await provider.get_aggregate_data("1001", {"dataDate": "2026-08-26"})
 
         self.assertEqual(ids, ["1001", "1002"])
-        self.assertEqual(data, {"score": 88})
-        self.assertEqual(FakeAsyncClient.calls[0]["json"]["status"], "active")
-        self.assertEqual(FakeAsyncClient.calls[0]["json"]["segment"], "A")
-        self.assertEqual(FakeAsyncClient.calls[1]["json"]["customerId"], "1001")
+        self.assertEqual(
+            data,
+            {
+                "follow_plan": [
+                    {"title": "call customer", "target_type": "customer"}
+                ],
+                "msgs": {
+                    "rows": [
+                        {"content": "first"},
+                        {"content": "second"},
+                        {"content": "third"},
+                    ],
+                    "totalNum": 3,
+                    "pageSize": 2000,
+                    "pageNum": 1,
+                },
+            },
+        )
+        list_call = next(call for call in FakeAsyncClient.calls if call["url"].endswith("/list"))
+        follow_call = next(
+            call for call in FakeAsyncClient.calls if call["url"].endswith("/follow-plan")
+        )
+        chat_calls = [
+            call for call in FakeAsyncClient.calls if call["url"].endswith("/chat-messages")
+        ]
+        self.assertEqual(
+            list_call["json"],
+            {
+                "last_cust_no": "1000",
+                "pageSize": 50,
+            },
+        )
+        self.assertEqual(follow_call["json"], {"target_id": "1001"})
+        self.assertEqual(len(chat_calls), 2)
+        self.assertEqual(
+            chat_calls[0]["json"],
+            {
+                "to_list": "1001",
+                "from1": "1001",
+                "data_dt": "20260826",
+                "pageNum": 1,
+                "pageSize": 2000,
+            },
+        )
+        self.assertEqual(chat_calls[1]["json"]["pageNum"], 2)
+        for call in (list_call, follow_call, *chat_calls):
+            self.assertEqual(call["headers"]["channelSystem"], "AB")
+            self.assertTrue(call["headers"]["traceId"])
+        self.assertEqual(
+            len({call["headers"]["traceId"] for call in (list_call, follow_call, *chat_calls)}),
+            4,
+        )
+        self.assertNotIn("limit", list_call["json"])
+
+    async def test_task_sends_aggregate_data_to_target_agent(self):
+        aggregate_data = {
+            "follow_plan": [{"title": "call customer"}],
+            "msgs": {"rows": [{"content": "hello"}], "totalNum": 1},
+        }
+        provider = SimpleNamespace(get_aggregate_data=AsyncMock(return_value=aggregate_data))
+        target_client = SimpleNamespace(
+            run=AsyncMock(return_value=SimpleNamespace(ok=True, data={"answer": "done"}))
+        )
+        definition = KehutongSecretaryBatchDefinition()
+        ctx = SimpleNamespace(batch=SimpleNamespace(batch_id="bat-1"))
+        task = SimpleNamespace(payload={"customer_id": "1001"})
+        runtime_context = {
+            "customer_data_request": {"dataDate": "2026-08-26"},
+            "agent_inputs": {},
+            "agent_options": {},
+        }
+
+        with (
+            patch.object(definition, "agent_config", return_value={"target_agent": {}}),
+            patch.object(definition_module, "build_customer_provider", return_value=provider),
+            patch(
+                "app.agents.generic_agent.workflow.build_generic_agent_client",
+                return_value=target_client,
+            ),
+        ):
+            result = await definition.execute_task(ctx, task, runtime_context)
+
+        self.assertEqual(result.output["result"], {"answer": "done"})
+        provider.get_aggregate_data.assert_awaited_once_with(
+            "1001", {"dataDate": "2026-08-26"}
+        )
+        agent_inputs = target_client.run.await_args.kwargs["inputs"]
+        self.assertEqual(agent_inputs["customerId"], "1001")
+        self.assertIsInstance(agent_inputs["aggregateData"], str)
+        self.assertEqual(json.loads(agent_inputs["aggregateData"]), aggregate_data)
+        self.assertNotIn("customerData", agent_inputs)
 
     async def test_agent_submission_creates_durable_batch_and_returns_running(self):
         req = KehutongSecretaryReq.model_validate(
             {
-                "inputs": {"customer_list_request": {"segment": "A"}},
+                "inputs": {
+                    "customer_list_request": {
+                        "last_cust_no": "1000000009",
+                        "pageSize": 50,
+                    }
+                },
                 "options": {
                     "batch": {"max_concurrency": 7, "max_attempts": 4},
                     "fail_on_any_task_error": True,
@@ -158,6 +310,14 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["options"], BatchOptions(max_concurrency=7, max_attempts=4))
         self.assertEqual(kwargs["batch_input"]["request_id"], "req-1")
         self.assertTrue(kwargs["batch_input"]["fail_on_any_task_error"])
+        self.assertEqual(
+            kwargs["batch_input"]["payload"]["inputs"]["customer_list_request"],
+            {"last_cust_no": "1000000009", "pageSize": 50},
+        )
+        self.assertEqual(
+            kwargs["batch_input"]["payload"]["inputs"]["customer_data_request"]["dataDate"],
+            datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat(),
+        )
         self.assertEqual(tracker.statuses[-1][1]["status"], "RUNNING")
 
     async def test_finalize_publishes_one_json_and_returns_only_its_url_metadata(self):
@@ -205,6 +365,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
                     BATCH_RETENTION_SEC=3600,
                     STAGING_DIR=staging_dir,
                     ESB_UPLOAD_TIMEOUT_SEC=30,
+                    ESB_BASE_URL="http://file-server/results",
                 ),
             )
             with (
@@ -222,9 +383,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
                     request_id="req:1",
                     agent_name="kehutong_secretary",
                     agent_config={
-                        "result_server_path": "http://file-server/upload",
-                        "result_public_base_url": "http://file-server/results",
-                        "result_subdir": "kehutong_secretary",
+                        "result_subdir": None,
                     },
                 )
 
@@ -235,7 +394,13 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(document["customers"][0]["result"], {"answer": "A"})
         self.assertEqual(
             result["result_url"],
-            "http://file-server/results/kehutong_secretary/req_1-result.json",
+            "http://file-server/results/req_1-result.json",
+        )
+        self.assertEqual(result["server_file"], "req_1-result.json")
+        self.assertNotIn("/None/", result["result_url"])
+        self.assertEqual(
+            upload.await_args.kwargs["server_path"],
+            "http://file-server/results",
         )
         self.assertNotIn("customers", result)
 

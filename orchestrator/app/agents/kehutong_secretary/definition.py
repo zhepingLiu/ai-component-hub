@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -27,7 +28,9 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         envelope = self.envelope(ctx)
         payload = KehutongBatchPayload.model_validate(envelope.payload)
         provider = build_customer_provider(self.agent_config(ctx))
-        customer_ids = await provider.list_customer_ids(payload.inputs.customer_list_request)
+        customer_ids = await provider.list_customer_ids(
+            payload.inputs.customer_list_request.model_dump(mode="json")
+        )
         if payload.options.deduplicate_customer_ids:
             customer_ids = list(dict.fromkeys(customer_ids))
         if len(customer_ids) > payload.options.max_customers:
@@ -37,10 +40,14 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
             )
         return {
             "customer_ids": customer_ids,
-            "customer_data_request": payload.inputs.customer_data_request,
-            "agent_inputs": payload.inputs.agent_inputs,
+            "customer_data_request": payload.inputs.customer_data_request.model_dump(mode="json"),
+            "agent_inputs": self.build_agent_inputs(),
             "agent_options": payload.options.agent_options,
         }
+
+    def build_agent_inputs(self) -> dict[str, Any]:
+        """Kehutong-specific base inputs merged with each customer's data."""
+        return {}
 
     async def produce_tasks(
         self,
@@ -63,7 +70,7 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         customer_id = str(task.payload["customer_id"])
         config = self.agent_config(ctx)
         try:
-            customer_data = await build_customer_provider(config).get_customer_data(
+            aggregate_data = await build_customer_provider(config).get_aggregate_data(
                 customer_id,
                 dict(runtime_context.get("customer_data_request") or {}),
             )
@@ -76,10 +83,14 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
 
         agent_inputs = dict(runtime_context.get("agent_inputs") or {})
         customer_id_field = str(config.get("agent_customer_id_field", "customerId"))
-        customer_data_field = str(config.get("agent_customer_data_field", "customerData"))
+        customer_data_field = str(config.get("agent_customer_data_field", "aggregateData"))
         request_id_field = str(config.get("agent_batch_request_id_field", "batchRequestId"))
         agent_inputs[customer_id_field] = customer_id
-        agent_inputs[customer_data_field] = customer_data
+        agent_inputs[customer_data_field] = json.dumps(
+            aggregate_data,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         agent_inputs[request_id_field] = f"{ctx.batch.batch_id}:{customer_id}"
 
         target_config = config.get("target_agent", {}) or {}

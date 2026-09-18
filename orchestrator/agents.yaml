@@ -60,28 +60,21 @@ agents:
   #       X-Api-Key: replace-me
   #     retryable_status_codes: [408, 429, 500, 502, 503, 504]
   #     customer_list_api:
-  #       url: http://customer-service/customer/list
+  #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryActiveCustNo
   #       method: POST
-  #       static_body:
-  #         status: active
   #       response:
-  #         customer_ids_path: data.customerIds
-  #     customer_data_api:
-  #       url: http://customer-service/customer/data
+  #         customer_ids_path: data
+  #     chat_messages_api:
+  #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryUserChatMessage
   #       method: POST
-  #       customer_id:
-  #         location: body
-  #         field: customerId
-  #       static_body:
-  #         includeHistory: true
-  #       response:
-  #         customer_data_path: data
+  #     follow_plan_api:
+  #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryFollowRecords
+  #       method: POST
   #   agent_customer_id_field: customerId
-  #   agent_customer_data_field: customerData
+  #   agent_customer_data_field: aggregateData
   #   agent_batch_request_id_field: batchRequestId
-  #   result_server_path: http://file-server/internal-upload-path
-  #   result_public_base_url: http://file-server/public/results
-  #   result_subdir: kehutong_secretary
+  #   # result_server_path and result_public_base_url default to ESB_BASE_URL.
+  #   result_subdir: SSC
   #   target_agent:
   #     base_url: http://agent-platform:7002
   #     api_key: replace-me

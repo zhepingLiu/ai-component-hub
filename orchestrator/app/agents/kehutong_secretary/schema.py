@@ -1,17 +1,32 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...batch.models import BatchOptions
 
 
+def _shanghai_today() -> date:
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
+
+
+class CustomerDataRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    dataDate: date = Field(default_factory=_shanghai_today)
+
+
+class CustomerListRequest(BaseModel):
+    last_cust_no: str = "0"
+    pageSize: int = Field(default=50, ge=1, le=2000)
+
+
 class KehutongInputs(BaseModel):
-    customer_list_request: dict[str, Any] = Field(default_factory=dict)
-    customer_data_request: dict[str, Any] = Field(default_factory=dict)
-    agent_inputs: dict[str, Any] = Field(default_factory=dict)
+    customer_list_request: CustomerListRequest = Field(default_factory=CustomerListRequest)
+    customer_data_request: CustomerDataRequest = Field(default_factory=CustomerDataRequest)
 
 
 class KehutongOptions(BaseModel):
@@ -45,12 +60,6 @@ class KehutongSecretaryResp(BaseModel):
 
 class ResponsePathConfig(BaseModel):
     customer_ids_path: str | None = None
-    customer_data_path: str | None = None
-
-
-class CustomerIdBinding(BaseModel):
-    location: Literal["body", "query", "path"] = "body"
-    field: str = "customerId"
 
 
 class HttpApiConfig(BaseModel):
@@ -58,7 +67,6 @@ class HttpApiConfig(BaseModel):
     method: Literal["GET", "POST"] = "POST"
     static_body: dict[str, Any] = Field(default_factory=dict)
     response: ResponsePathConfig = Field(default_factory=ResponsePathConfig)
-    customer_id: CustomerIdBinding | None = None
 
 
 class CustomerProviderConfig(BaseModel):
@@ -69,7 +77,8 @@ class CustomerProviderConfig(BaseModel):
         default_factory=lambda: {408, 429, 500, 502, 503, 504}
     )
     customer_list_api: HttpApiConfig
-    customer_data_api: HttpApiConfig
+    chat_messages_api: HttpApiConfig
+    follow_plan_api: HttpApiConfig
 
 
 class KehutongBatchPayload(BaseModel):

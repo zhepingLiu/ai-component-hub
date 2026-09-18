@@ -23,8 +23,9 @@ async def publish_kehutong_result(
     agent_name: str,
     agent_config: dict[str, Any],
 ) -> dict[str, Any]:
-    server_path = str(agent_config.get("result_server_path", "")).strip()
-    public_base_url = str(agent_config.get("result_public_base_url", "")).strip()
+    esb_base_url = str(ctx.settings.ESB_BASE_URL or "").strip()
+    server_path = str(agent_config.get("result_server_path") or esb_base_url).strip()
+    public_base_url = str(agent_config.get("result_public_base_url") or esb_base_url).strip()
     if not server_path:
         raise RuntimeError("result_server_path is not configured")
     if not public_base_url:
@@ -73,9 +74,11 @@ async def publish_kehutong_result(
         "summary": summary,
         "customers": customers,
     }
-    subdir = _safe_name(str(agent_config.get("result_subdir", "kehutong_secretary")))
+    raw_subdir = agent_config.get("result_subdir", "kehutong_secretary")
+    subdir = _safe_name(str(raw_subdir)) if raw_subdir else ""
     request_name = _safe_name(request_id)
-    server_file = f"{subdir}/{request_name}-result.json"
+    filename = f"{request_name}-result.json"
+    server_file = f"{subdir}/{filename}" if subdir else filename
     local_path = Path(ctx.settings.STAGING_DIR) / request_name / server_file
     local_path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
