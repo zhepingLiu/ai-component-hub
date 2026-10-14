@@ -20,7 +20,9 @@ class CustomerDataRequest(BaseModel):
 
 
 class CustomerListRequest(BaseModel):
-    last_cust_no: str = "0"
+    model_config = ConfigDict(extra="forbid")
+
+    last_id: int = Field(default=0, ge=0, strict=True)
     pageSize: int = Field(default=50, ge=1, le=2000)
 
 
@@ -77,6 +79,7 @@ class CustomerProviderConfig(BaseModel):
         default_factory=lambda: {408, 429, 500, 502, 503, 504}
     )
     customer_list_api: HttpApiConfig
+    customer_relations_api: HttpApiConfig
     chat_messages_api: HttpApiConfig
     follow_plan_api: HttpApiConfig
 

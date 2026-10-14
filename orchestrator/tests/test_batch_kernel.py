@@ -34,6 +34,7 @@ fake_yaml = ModuleType("yaml")
 fake_yaml.safe_load = lambda value: {}
 sys.modules.setdefault("yaml", fake_yaml)
 
+from app.batch.definition import BatchTaskSpec
 from app.batch.coordinator import BatchCoordinator
 from app.batch.definitions import AgentBatchDefinition, build_batch_registry
 from app.batch.models import BatchOptions, BatchStatus, TaskStatus
@@ -98,13 +99,14 @@ class FakeRedis:
 
     def lrem(self, key, count, value):
         values = self.lists[key]
-        removed = 0
-        indexes = range(len(values) - 1, -1, -1) if count < 0 else range(len(values))
-        for index in list(indexes):
-            if values[index] == value and (count == 0 or removed < abs(count)):
-                values.pop(index)
-                removed += 1
-        return removed
+        indexes = [index for index, item in enumerate(values) if item == value]
+        if count > 0:
+            indexes = indexes[:count]
+        elif count < 0:
+            indexes = indexes[count:]
+        for index in reversed(indexes):
+            values.pop(index)
+        return len(indexes)
 
     def brpoplpush(self, source, destination, timeout=0):
         return self.rpoplpush(source, destination)
@@ -150,6 +152,46 @@ class BatchKernelTests(unittest.IsolatedAsyncioTestCase):
             idempotency_key=idempotency_key,
             scheduled_at=scheduled_at,
         )
+
+    async def test_ordered_tasks_wait_through_retries_and_survive_reload(self):
+        batch, _ = await self._create([], options=BatchOptions(max_concurrency=10))
+        await self.store.transition_batch(batch.batch_id, expected={BatchStatus.CREATED}, target=BatchStatus.PREPARING)
+        await self.store.transition_batch(batch.batch_id, expected={BatchStatus.PREPARING}, target=BatchStatus.GENERATING_TASKS)
+        tasks = []
+        for employee in ("1", "2", "3"):
+            tasks.append(await self.store.create_task(batch.batch_id, BatchTaskSpec(
+                business_key=f"a:{employee}", payload={"customer_id": "a", "emp_user_id": employee},
+                wait_for_previous=True,
+            )))
+        self.assertIsNone(await self.store.create_task(batch.batch_id, BatchTaskSpec(
+            business_key="a:2", payload={}, wait_for_previous=True,
+        )))
+        await self.store.mark_generation_complete(batch.batch_id)
+        self.store = RedisBatchStore(self.redis, key_prefix="test:batch", retention_seconds=3600)
+        first = await self.store.claim_task("worker-1", timeout=0)
+        self.assertEqual(first.task_id, tasks[0].task_id)
+        self.assertIsNone(await self.store.claim_task("worker-2", timeout=0))
+        await self.store.complete_task(first.task_id, TaskExecutionResult.retryable_failure("TEMP", "retry"))
+        self.assertIsNone(self.store._reserve_task(tasks[1].task_id, "worker-2"))
+        self.assertEqual((await self.store.get_task(tasks[1].task_id)).attempt, 0)
+        first = self.store._reserve_task(first.task_id, "worker-1")
+        await self.store.complete_task(first.task_id, TaskExecutionResult.permanent_failure("BAD", "failed"))
+        second = self.store._reserve_task(tasks[1].task_id, "worker-2")
+        self.assertIsNotNone(second)
+        self.assertIsNone(self.store._reserve_task(tasks[2].task_id, "worker-3"))
+        await self.store.complete_task(second.task_id, TaskExecutionResult.succeeded())
+        third = self.store._reserve_task(tasks[2].task_id, "worker-3")
+        self.assertIsNotNone(third)
+        await self.store.complete_task(third.task_id, TaskExecutionResult.permanent_failure("BAD", "failed"))
+        await self.store.begin_finalize(batch.batch_id)
+        await self.store.finish_finalize(batch.batch_id, result={})
+        await self.store.retry_failed_tasks(batch.batch_id)
+        # Non-adjacent failures must remain serial even though the middle task succeeded.
+        first = self.store._reserve_task(tasks[0].task_id, "worker-1")
+        self.assertIsNotNone(first)
+        self.assertIsNone(self.store._reserve_task(tasks[2].task_id, "worker-3"))
+        await self.store.complete_task(first.task_id, TaskExecutionResult.succeeded())
+        self.assertIsNotNone(self.store._reserve_task(tasks[2].task_id, "worker-3"))
 
     async def test_echo_batch_runs_end_to_end(self) -> None:
         batch, created = await self._create([{"id": "a", "value": 1}, {"id": "b", "value": 2}])

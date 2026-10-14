@@ -270,12 +270,14 @@ class RedisBatchStore:
                 return None
             if not self.r.sadd(self._business_keys_key(batch_id), spec.business_key):
                 return None
+            previous = self.r.lrange(self._task_ids_key(batch_id), -1, -1) if spec.wait_for_previous else []
             task = TaskRecord(
                 task_id=f"tsk_{uuid.uuid4().hex}",
                 batch_id=batch_id,
                 business_key=spec.business_key,
                 status=TaskStatus.PENDING,
                 payload=spec.payload,
+                predecessor_task_id=previous[0] if previous else None,
                 max_attempts=batch.options.max_attempts,
                 created_at=utc_now(),
             )
@@ -417,6 +419,14 @@ class RedisBatchStore:
                     self._save_task(task)
                     self._save_batch(batch)
                 return None
+            if task.predecessor_task_id:
+                previous = self._get_task(task.predecessor_task_id)
+                if not previous or previous.status not in {
+                    TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED,
+                }:
+                    self.r.lrem(self.processing_queue_key, 1, task_id)
+                    self.r.zadd(self.retry_key, {task_id: time.time() + 1})
+                    return None
             now = time.time()
             task.status = TaskStatus.RUNNING
             task.attempt += 1
@@ -715,6 +725,7 @@ class RedisBatchStore:
                 return None
             ids = self.r.lrange(self._task_ids_key(batch_id), 0, -1)
             retried = 0
+            previous_retried_id = None
             pipe = self.r.pipeline(transaction=True)
             for task_id in ids:
                 task = self._get_task(task_id)
@@ -726,6 +737,9 @@ class RedisBatchStore:
                 task.error_code = None
                 task.error = None
                 task.finished_at = None
+                if task.predecessor_task_id:
+                    task.predecessor_task_id = previous_retried_id
+                previous_retried_id = task_id
                 pipe.set(self._task_key(task_id), task.model_dump_json(), ex=self.retention_seconds)
                 pipe.lpush(self.ready_queue_key, task_id)
                 retried += 1

@@ -13,6 +13,7 @@ from .results import TaskExecutionResult
 class BatchTaskSpec:
     business_key: str
     payload: dict[str, Any]
+    wait_for_previous: bool = False
 
 
 @dataclass(frozen=True)

@@ -79,6 +79,7 @@ class TaskRecord(BaseModel):
     business_key: str
     status: TaskStatus
     payload: dict[str, Any]
+    predecessor_task_id: str | None = None
     attempt: int = 0
     max_attempts: int
     lease_until: float | None = None

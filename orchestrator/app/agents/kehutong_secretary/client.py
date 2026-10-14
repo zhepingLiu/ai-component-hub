@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import httpx
 
-from .schema import CustomerProviderConfig, HttpApiConfig
+from .schema import CustomerListRequest, CustomerProviderConfig, HttpApiConfig
 
 
 class RetryableCustomerApiError(RuntimeError):
@@ -21,7 +21,11 @@ class PermanentCustomerApiError(RuntimeError):
 class CustomerDataProvider(Protocol):
     async def list_customer_ids(self, request: dict[str, Any]) -> list[str]: ...
 
-    async def get_aggregate_data(self, customer_id: str, request: dict[str, Any]) -> Any: ...
+    async def list_employee_ids(self, customer_id: str) -> list[str]: ...
+
+    async def get_aggregate_data(
+        self, customer_id: str, emp_user_id: str, request: dict[str, Any]
+    ) -> Any: ...
 
 
 class HttpCustomerDataProvider:
@@ -30,36 +34,66 @@ class HttpCustomerDataProvider:
 
     async def list_customer_ids(self, request: dict[str, Any]) -> list[str]:
         api = self.config.customer_list_api
+        customer_request = CustomerListRequest.model_validate(request).model_dump()
+        path = api.response.customer_ids_path or "data"
         payload = await self._request(
             api,
-            request,
-            extra_headers={"channelSystem": "AB", "traceId": str(uuid4())},
+            customer_request,
+            extra_headers=self._customer_api_headers(),
         )
-        path = api.response.customer_ids_path or "data"
         customer_records = self._extract(payload, path)
         if not isinstance(customer_records, list):
             raise PermanentCustomerApiError(
                 f"customer id response path '{path}' did not resolve to a list"
             )
-
         customer_ids: list[str] = []
         for index, record in enumerate(customer_records):
-            if not isinstance(record, dict) or record.get("cust_no") is None:
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get("cust_no"), str)
+                or not record["cust_no"].strip()
+            ):
                 raise PermanentCustomerApiError(
-                    f"customer id response item at index {index} does not contain 'cust_no'"
+                    f"customer response item at index {index} requires string cust_no"
                 )
-            customer_ids.append(str(record["cust_no"]))
+            customer_ids.append(record["cust_no"])
         return customer_ids
+
+    async def list_employee_ids(self, customer_id: str) -> list[str]:
+        payload = await self._request(
+            self.config.customer_relations_api,
+            {"customer_id": customer_id},
+            extra_headers=self._customer_api_headers(),
+        )
+        if not isinstance(payload, dict) or payload.get("stateCode") != "0000":
+            raise RetryableCustomerApiError("customer relations API did not return stateCode '0000'")
+        records = self._extract(payload, "data")
+        if not isinstance(records, list):
+            raise PermanentCustomerApiError("customer relations response 'data' is not a list")
+        employee_ids = []
+        for index, record in enumerate(records):
+            if (
+                not isinstance(record, dict)
+                or record.get("customer_id") != customer_id
+                or not isinstance(record.get("emp_user_id"), str)
+                or not record["emp_user_id"].strip()
+            ):
+                raise PermanentCustomerApiError(
+                    f"invalid customer relation at index {index} for customer {customer_id}"
+                )
+            employee_ids.append(record["emp_user_id"])
+        return list(dict.fromkeys(employee_ids))
 
     async def get_aggregate_data(
         self,
         customer_id: str,
+        emp_user_id: str,
         request: dict[str, Any],
     ) -> dict[str, Any]:
         data_dt = self._format_data_date(request.get("dataDate"))
         follow_plan, messages = await asyncio.gather(
             self._get_follow_plan(customer_id),
-            self._get_all_chat_messages(customer_id, data_dt),
+            self._get_all_chat_messages(customer_id, emp_user_id, data_dt),
         )
         return {"follow_plan": follow_plan, "msgs": messages}
 
@@ -77,6 +111,7 @@ class HttpCustomerDataProvider:
     async def _get_all_chat_messages(
         self,
         customer_id: str,
+        emp_user_id: str,
         data_dt: str,
     ) -> dict[str, Any]:
         page_num = 1
@@ -89,7 +124,7 @@ class HttpCustomerDataProvider:
                 self.config.chat_messages_api,
                 {
                     "to_list": customer_id,
-                    "from1": customer_id,
+                    "from1": emp_user_id,
                     "data_dt": data_dt,
                     "pageNum": page_num,
                     "pageSize": page_size,

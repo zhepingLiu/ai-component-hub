@@ -38,8 +38,12 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
                 f"customer count {len(customer_ids)} exceeds configured limit "
                 f"{payload.options.max_customers}"
             )
+        relations = []
+        for customer_id in customer_ids:
+            for emp_user_id in await provider.list_employee_ids(customer_id):
+                relations.append({"customer_id": customer_id, "emp_user_id": emp_user_id})
         return {
-            "customer_ids": customer_ids,
+            "customer_relations": relations,
             "customer_data_request": payload.inputs.customer_data_request.model_dump(mode="json"),
             "agent_inputs": self.build_agent_inputs(),
             "agent_options": payload.options.agent_options,
@@ -55,10 +59,14 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         batch_input: dict[str, Any],
         runtime_context: dict[str, Any],
     ) -> AsyncIterator[BatchTaskSpec]:
-        for customer_id in runtime_context.get("customer_ids", []):
+        for relation in runtime_context["customer_relations"]:
             yield BatchTaskSpec(
-                business_key=str(customer_id),
-                payload={"customer_id": str(customer_id)},
+                business_key=json.dumps(
+                    [relation["customer_id"], relation["emp_user_id"]],
+                    ensure_ascii=False, separators=(",", ":"),
+                ),
+                payload=dict(relation),
+                wait_for_previous=True,
             )
 
     async def execute_task(
@@ -68,10 +76,13 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         runtime_context: dict[str, Any],
     ) -> TaskExecutionResult:
         customer_id = str(task.payload["customer_id"])
+        emp_user_id = str(task.payload["emp_user_id"])
+        agent_request_id = f"{ctx.batch.batch_id}:{task.business_key}"
         config = self.agent_config(ctx)
         try:
             aggregate_data = await build_customer_provider(config).get_aggregate_data(
                 customer_id,
+                emp_user_id,
                 dict(runtime_context.get("customer_data_request") or {}),
             )
         except PermanentCustomerApiError as exc:
@@ -91,7 +102,7 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        agent_inputs[request_id_field] = f"{ctx.batch.batch_id}:{customer_id}"
+        agent_inputs[request_id_field] = agent_request_id
 
         target_config = config.get("target_agent", {}) or {}
         if not isinstance(target_config, dict):
@@ -117,7 +128,8 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         return TaskExecutionResult.succeeded(
             {
                 "customer_id": customer_id,
-                "agent_request_id": f"{ctx.batch.batch_id}:{customer_id}",
+                "emp_user_id": emp_user_id,
+                "agent_request_id": agent_request_id,
                 "result": agent_result.data,
             }
         )

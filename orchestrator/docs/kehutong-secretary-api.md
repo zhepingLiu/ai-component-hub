@@ -8,7 +8,7 @@
 - 对外地址：`/api/agents/kehutong-secretary`
 - Content-Type：`application/json`
 
-该接口创建一个异步、可持久化的客户批处理任务。系统先查询客户列表，再为每个客户创建独立子任务，读取客户聊天记录和跟进计划，并调用目标 Agent。
+该接口创建一个异步、可持久化的客户批处理任务。系统先查询活跃客户列表，再查询每个客户的好友关系。全部关系查询成功后，按 `(customer_id, emp_user_id)` 创建独立子任务，读取该组合的聊天记录及客户跟进计划，并调用目标 Agent。子任务按客户列表及关系响应的顺序串行执行，前一任务重试期间后续任务等待；前一任务成功或最终失败后继续下一任务。
 
 ### 1.2 请求参数
 
@@ -19,8 +19,8 @@
 | `request_id`                                  | string                  |   否 | 系统生成 UUID      | 业务请求唯一标识，也是幂等键的一部分。相同 Agent 下重复提交相同 `request_id`，系统返回已有任务状态，不重复创建批次 |
 | `inputs`                                      | object                  |   否 | `{}`               | 业务输入                                                                                                           |
 | `inputs.customer_list_request`                | object                  |   否 | `{}`               | 客户列表查询参数                                                                                                   |
-| `inputs.customer_list_request.last_cust_no`   | string                  |   否 | `"0"`              | 起始/上一客户号，发送给客户列表接口                                                                                |
-| `inputs.customer_list_request.pageSize`       | integer                 |   否 | `50`               | 客户列表条数，取值范围 `1~2000`。当前实现只请求一次客户列表接口，不继续翻页                                        |
+| `inputs.customer_list_request.last_id`   | integer                 |   否 | `0`                | 本次查询游标，非负整数；由 client 传入并负责后续分页                                                                                |
+| `inputs.customer_list_request.pageSize`       | integer                 |   否 | `50`               | 本次客户列表查询条数，取值范围 `1~2000`；服务端仅查询一次                                        |
 | `inputs.customer_data_request`                | object                  |   否 | `{}`               | 客户数据查询参数                                                                                                   |
 | `inputs.customer_data_request.dataDate`       | string(date)            |   否 | 上海时区当天日期   | 业务日期，请求格式为 `YYYY-MM-DD`；调用聊天接口时转换为 `YYYYMMDD`                                                 |
 | `options`                                     | object                  |   否 | `{}`               | 执行选项                                                                                                           |
@@ -30,7 +30,7 @@
 | `options.fail_on_any_task_error`              | boolean                 |   否 | `false`            | 为 `true` 时，只要有客户子任务失败，最终 Agent 状态即为 `FAILED`；为 `false` 时允许部分失败并返回结果汇总          |
 | `options.agent_options`                       | object                  |   否 | `{}`               | 原样传给目标 Agent 的扩展选项                                                                                      |
 | `options.batch`                               | object                  |   否 | `{}`               | 批处理、超时和重试配置                                                                                             |
-| `options.batch.max_concurrency`               | integer                 |   否 | `10`               | 最大并发客户任务数，范围 `1~100`                                                                                   |
+| `options.batch.max_concurrency`               | integer                 |   否 | `10`               | 并发上限，范围 `1~100`；本业务通过任务依赖保持串行                                                                                   |
 | `options.batch.max_attempts`                  | integer                 |   否 | `3`                | 单个客户任务最大尝试次数，范围 `1~10`                                                                              |
 | `options.batch.task_timeout_seconds`          | integer                 |   否 | `300`              | 单个客户任务超时秒数，范围 `10~86400`                                                                              |
 | `options.batch.retry_delays_seconds`          | integer[]               |   否 | `[60,300,1200]`    | 客户任务重试等待秒数；每项范围 `0~86400`                                                                           |
@@ -50,7 +50,7 @@ curl -X POST '{gateway_base_url}/api/agents/kehutong-secretary' \
     "request_id": "kht-20260918-001",
     "inputs": {
       "customer_list_request": {
-        "last_cust_no": "0",
+        "last_id": 0,
         "pageSize": 50
       },
       "customer_data_request": {
@@ -175,8 +175,8 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
         "failed": 0,
         "cancelled": 0
       },
-      "result_url": "http://file-server/results/SSC/kht-20260918-001-result.json",
-      "server_file": "SSC/kht-20260918-001-result.json",
+      "result_url": "http://file-server/results/kht-20260918-001-result.json",
+      "server_file": "kht-20260918-001-result.json",
       "size_bytes": 1024,
       "sha256": "<sha256>",
       "batch_id": "<batch_id>",
@@ -251,14 +251,15 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
     {
       "task_id": "<task_id>",
       "batch_id": "<batch_id>",
-      "business_key": "1001",
+      "business_key": "[\"1001\",\"manager-1\"]",
       "status": "SUCCEEDED",
-      "payload": {"customer_id": "1001"},
+      "payload": {"customer_id": "1001", "emp_user_id": "manager-1"},
       "attempt": 1,
       "max_attempts": 3,
       "output": {
         "customer_id": "1001",
-        "agent_request_id": "<batch_id>:1001",
+        "emp_user_id": "manager-1",
+        "agent_request_id": "<batch_id>:[\"1001\",\"manager-1\"]",
         "result": {}
       },
       "error_code": null,
@@ -346,7 +347,7 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
 | ---------------- | ------------ | ------------------------------------------------------------------------------- |
 | `customerId`     | string       | 客户号；由 `agent_customer_id_field` 配置字段名                                 |
 | `aggregateData`  | string(JSON) | 上述聚合对象序列化后的 JSON 字符串；由 `agent_customer_data_field` 配置字段名   |
-| `batchRequestId` | string       | 格式为 `{batch_id}:{customer_id}`；由 `agent_batch_request_id_field` 配置字段名 |
+| `batchRequestId` | string       | 格式为 `{batch_id}:{business_key}`，其中 business_key 为客户和员工 ID 的 JSON 数组字符串；由 `agent_batch_request_id_field` 配置字段名 |
 
 ## 6. 完成回调(当前未配置)
 
@@ -367,8 +368,8 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
       "failed": 0,
       "cancelled": 0
     },
-    "result_url": "http://file-server/results/SSC/kht-20260918-001-result.json",
-    "server_file": "SSC/kht-20260918-001-result.json",
+    "result_url": "http://file-server/results/kht-20260918-001-result.json",
+    "server_file": "kht-20260918-001-result.json",
     "size_bytes": 1024,
     "sha256": "<sha256>"
   },
@@ -387,7 +388,7 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
 
 ## 7. 结果文件格式
 
-最终明细文件为 JSON，文件名格式为 `{request_id}-result.json`。不安全的文件名字符会被替换为下划线。默认保存到配置的 `result_subdir`；未设置该项时默认目录为 `kehutong_secretary`。
+最终明细文件为 JSON，文件名格式为 `{request_id}-result.json`。不安全的文件名字符会被替换为下划线。文件直接保存到配置的基础路径下，不再添加子目录；旧配置项 `result_subdir` 不再生效。
 
 ```json
 {
@@ -404,12 +405,14 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
   "customers": [
     {
       "customer_id": "1001",
+      "emp_user_id": "manager-1",
       "status": "SUCCEEDED",
       "attempts": 1,
       "result": {}
     },
     {
-      "customer_id": "1002",
+      "customer_id": "1001",
+      "emp_user_id": "manager-2",
       "status": "FAILED",
       "attempts": 3,
       "error": "downstream unavailable"
@@ -420,7 +423,37 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
 
 ## 8. 实现注意事项
 
-1. 客户列表接口当前只调用一次，`pageSize` 不是自动分页大小；如客户数超过一页，需要上游一次返回完整目标集合，或后续补充分页逻辑。
-2. 查询聊天记录和跟进计划会并发执行；任一接口失败都会使当前客户子任务进入失败或重试流程。
+1. 客户列表接口仅按 client 传入的 `last_id` 和 `pageSize` 查询一次，响应 `data` 为 `[{"cust_no":"客户号","id":1}, ...]`。服务端只处理本次响应中的客户，不提取下一页游标，也不循环查询；后续分页由 client 负责。后续业务使用字符串 `cust_no`，不依赖响应中的分页 `id`。
+2. 查询聊天记录和跟进计划会并发执行；任一接口失败都会使当前客户与客户经理组合的子任务进入失败或重试流程。
 3. HTTP `408`、`429`、`500`、`502`、`503`、`504` 默认视为可重试错误；其他 `4xx/5xx` 默认视为永久错误。该集合可通过 `retryable_status_codes` 调整。
 4. 客户依赖接口返回非 JSON 时视为可重试错误；响应结构不符合本文约定时视为永久数据错误。
+
+## 9. 好友关系接口与部署配置
+
+`customer_provider.customer_relations_api` 为新增必填配置，配置示例见 `orchestrator/agents.yaml`。
+
+- 方法：`POST`
+- UAT：`http://10.197.129.35:6603/api/kht/sjfw_mysql/queryCustomerRelate`
+- 请求头：`channelSystem: AB`，每次请求生成独立 `traceId`。
+- 请求体：`{"customer_id":"a"}`。
+- 响应示例：
+
+```json
+{
+  "data": [
+    {"customer_id": "a", "emp_user_id": "1"},
+    {"customer_id": "a", "emp_user_id": "2"}
+  ],
+  "stateCode": "0000",
+  "message": "服务调用成功"
+}
+```
+
+相同关系按首次出现顺序去重。成功响应的 `data: []` 表示无关系，不创建子任务。
+非成功响应码、缺失响应码或无效关系数据会使准备阶段失败并按准备阶段策略重试，不会作为空关系跳过；耗尽重试后批次失败。
+
+每个子任务调用聊天接口时使用 `to_list=customer_id`、`from1=emp_user_id`，日期和分页方式不变。跟进计划仍按 `target_id=customer_id` 查询，下游 Agent 的输入字段和聚合数据结构保持不变。
+
+结果文件仍使用 `customers` 数组，每条增加 `emp_user_id`。汇总中的 `total`、`succeeded`、`failed`、`cancelled` 统计的是关系子任务数，而非客户数。手动重试失败子任务时也按原顺序串行执行。
+
+上线前需在实际启用的配置中增加关系接口，并等待旧版在途批次结束后再切换；旧版已创建的客户粒度任务不自动迁移为关系粒度任务。

@@ -48,7 +48,7 @@ agents:
   #   use_real: true
 
   # Durable customer fan-out agent. The agent inherits BatchAgent; every
-  # customer becomes a Redis-backed task with retry and resume support.
+  # customer/employee relation becomes a sequential Redis-backed task.
   # kehutong_secretary:
   #   handler: kehutong_secretary
   #   gateway_action: kehutong-secretary
@@ -64,6 +64,9 @@ agents:
   #       method: POST
   #       response:
   #         customer_ids_path: data
+  #     customer_relations_api:
+  #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryCustomerRelate
+  #       method: POST
   #     chat_messages_api:
   #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryUserChatMessage
   #       method: POST
@@ -74,7 +77,7 @@ agents:
   #   agent_customer_data_field: aggregateData
   #   agent_batch_request_id_field: batchRequestId
   #   # result_server_path and result_public_base_url default to ESB_BASE_URL.
-  #   result_subdir: SSC
+  #   # Result files are stored directly under the configured base path.
   #   target_agent:
   #     base_url: http://agent-platform:7002
   #     api_key: replace-me

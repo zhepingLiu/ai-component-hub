@@ -50,12 +50,15 @@ async def publish_kehutong_result(
     customers = []
     for task in tasks:
         item = {
-            "customer_id": task.business_key,
+            "customer_id": task.payload["customer_id"],
+            "emp_user_id": task.payload.get("emp_user_id"),
             "status": str(task.status),
             "attempts": task.attempt,
         }
         if task.output is not None:
-            item["result"] = task.output.get("result", task.output)
+            agent_result = task.output.get("result")
+            if isinstance(agent_result, dict) and "answer" in agent_result:
+                item["result"] = agent_result["answer"]
         if task.error:
             item["error"] = task.error
         customers.append(item)
@@ -74,11 +77,8 @@ async def publish_kehutong_result(
         "summary": summary,
         "customers": customers,
     }
-    raw_subdir = agent_config.get("result_subdir", "kehutong_secretary")
-    subdir = _safe_name(str(raw_subdir)) if raw_subdir else ""
     request_name = _safe_name(request_id)
-    filename = f"{request_name}-result.json"
-    server_file = f"{subdir}/{filename}" if subdir else filename
+    server_file = f"{request_name}-result.json"
     local_path = Path(ctx.settings.STAGING_DIR) / request_name / server_file
     local_path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
