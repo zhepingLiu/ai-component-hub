@@ -141,11 +141,14 @@ podTemplate(
               withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                 sh """
                   set -eu
+                  # Isolate Docker credentials from other builds and clean up on exit.
+                  DOCKER_CONFIG="\$(mktemp -d)"
+                  export DOCKER_CONFIG
+                  trap 'rm -rf "\${DOCKER_CONFIG}"' EXIT
                   echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
                   docker build -t ${image} -f gateway/Dockerfile .
                   docker push ${image}
                   docker rmi ${image}
-                  docker logout ${env.REGISTRY}
                 """
               }
             } else {
@@ -168,11 +171,14 @@ podTemplate(
               withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                 sh """
                   set -eu
+                  # Isolate Docker credentials from other builds and clean up on exit.
+                  DOCKER_CONFIG="\$(mktemp -d)"
+                  export DOCKER_CONFIG
+                  trap 'rm -rf "\${DOCKER_CONFIG}"' EXIT
                   echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
                   docker build -t ${image} -f components/tools-basic/Dockerfile .
                   docker push ${image}
                   docker rmi ${image}
-                  docker logout ${env.REGISTRY}
                 """
               }
             } else {
@@ -195,11 +201,14 @@ podTemplate(
               withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                 sh """
                   set -eu
+                  # Isolate Docker credentials from other builds and clean up on exit.
+                  DOCKER_CONFIG="\$(mktemp -d)"
+                  export DOCKER_CONFIG
+                  trap 'rm -rf "\${DOCKER_CONFIG}"' EXIT
                   echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
                   docker build -t ${image} -f components/esb/Dockerfile .
                   docker push ${image}
                   docker rmi ${image}
-                  docker logout ${env.REGISTRY}
                 """
               }
             } else {
@@ -222,11 +231,14 @@ podTemplate(
               withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                 sh """
                   set -eu
+                  # Isolate Docker credentials from other builds and clean up on exit.
+                  DOCKER_CONFIG="\$(mktemp -d)"
+                  export DOCKER_CONFIG
+                  trap 'rm -rf "\${DOCKER_CONFIG}"' EXIT
                   echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
                   docker build -t ${image} -f nginx/Dockerfile .
                   docker push ${image}
                   docker rmi ${image}
-                  docker logout ${env.REGISTRY}
                 """
               }
             } else {
@@ -249,11 +261,14 @@ podTemplate(
               withCredentials([usernamePassword(credentialsId: docker_registry_credential, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                 sh """
                   set -eu
+                  # Isolate Docker credentials from other builds and clean up on exit.
+                  DOCKER_CONFIG="\$(mktemp -d)"
+                  export DOCKER_CONFIG
+                  trap 'rm -rf "\${DOCKER_CONFIG}"' EXIT
                   echo "\${DOCKER_PASS}" | docker login ${env.REGISTRY} -u "\${DOCKER_USER}" --password-stdin
                   docker build -t ${image} -f orchestrator/Dockerfile .
                   docker push ${image}
                   docker rmi ${image}
-                  docker logout ${env.REGISTRY}
                 """
               }
             } else {
