@@ -28,9 +28,10 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         envelope = self.envelope(ctx)
         payload = KehutongBatchPayload.model_validate(envelope.payload)
         provider = build_customer_provider(self.agent_config(ctx))
-        customer_ids = await provider.list_customer_ids(
+        page = await provider.list_customer_page(
             payload.inputs.customer_list_request.model_dump(mode="json")
         )
+        customer_ids = page.customer_ids
         if payload.options.deduplicate_customer_ids:
             customer_ids = list(dict.fromkeys(customer_ids))
         if len(customer_ids) > payload.options.max_customers:
@@ -43,7 +44,9 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
             for emp_user_id in await provider.list_employee_ids(customer_id):
                 relations.append({"customer_id": customer_id, "emp_user_id": emp_user_id})
         return {
+            "last_id": page.last_id,
             "customer_relations": relations,
+            "groups_per_request": payload.options.groups_per_request,
             "customer_data_request": payload.inputs.customer_data_request.model_dump(mode="json"),
             "agent_inputs": self.build_agent_inputs(),
             "agent_options": payload.options.agent_options,
@@ -59,13 +62,17 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         batch_input: dict[str, Any],
         runtime_context: dict[str, Any],
     ) -> AsyncIterator[BatchTaskSpec]:
-        for relation in runtime_context["customer_relations"]:
+        relations = runtime_context["customer_relations"]
+        size = runtime_context.get("groups_per_request", 1)
+        for offset in range(0, len(relations), size):
+            group = relations[offset:offset + size]
+            pairs = [[r["customer_id"], r["emp_user_id"]] for r in group]
             yield BatchTaskSpec(
                 business_key=json.dumps(
-                    [relation["customer_id"], relation["emp_user_id"]],
+                    pairs[0] if size == 1 else pairs,
                     ensure_ascii=False, separators=(",", ":"),
                 ),
-                payload=dict(relation),
+                payload=dict(group[0]) if size == 1 else {"groups": group},
                 wait_for_previous=True,
             )
 
@@ -75,16 +82,26 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         task: TaskRecord,
         runtime_context: dict[str, Any],
     ) -> TaskExecutionResult:
-        customer_id = str(task.payload["customer_id"])
-        emp_user_id = str(task.payload["emp_user_id"])
+        grouped = "groups" in task.payload
+        relations = task.payload["groups"] if grouped else [task.payload]
         agent_request_id = f"{ctx.batch.batch_id}:{task.business_key}"
         config = self.agent_config(ctx)
         try:
-            aggregate_data = await build_customer_provider(config).get_aggregate_data(
-                customer_id,
-                emp_user_id,
-                dict(runtime_context.get("customer_data_request") or {}),
-            )
+            provider = build_customer_provider(config)
+            groups = []
+            for relation in relations:
+                customer_id = str(relation["customer_id"])
+                emp_user_id = str(relation["emp_user_id"])
+                aggregate_data = await provider.get_aggregate_data(
+                    customer_id,
+                    emp_user_id,
+                    dict(runtime_context.get("customer_data_request") or {}),
+                )
+                groups.append({
+                    "customer_id": customer_id,
+                    "emp_user_id": emp_user_id,
+                    "aggregate_data": aggregate_data,
+                })
         except PermanentCustomerApiError as exc:
             return TaskExecutionResult.permanent_failure("CUSTOMER_DATA_INVALID", str(exc))
         except RetryableCustomerApiError as exc:
@@ -96,9 +113,14 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
         customer_id_field = str(config.get("agent_customer_id_field", "customerId"))
         customer_data_field = str(config.get("agent_customer_data_field", "aggregateData"))
         request_id_field = str(config.get("agent_batch_request_id_field", "batchRequestId"))
-        agent_inputs[customer_id_field] = customer_id
+        # Multi-group requests identify customers inside each group, never by
+        # a misleading single top-level customer ID.
+        if grouped:
+            agent_inputs.pop(customer_id_field, None)
+        else:
+            agent_inputs[customer_id_field] = customer_id
         agent_inputs[customer_data_field] = json.dumps(
-            aggregate_data,
+            groups if grouped else aggregate_data,
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -125,6 +147,15 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
                 "TARGET_AGENT_FAILED",
                 agent_result.error or "target agent failed",
             )
+        if grouped:
+            try:
+                results = self.parse_group_results(agent_result.data, relations)
+            except (ValueError, TypeError, KeyError) as exc:
+                return TaskExecutionResult.retryable_failure("TARGET_AGENT_RESULT_INVALID", str(exc))
+            return TaskExecutionResult.succeeded({
+                "groups": results,
+                "agent_request_id": agent_request_id,
+            })
         return TaskExecutionResult.succeeded(
             {
                 "customer_id": customer_id,
@@ -134,6 +165,30 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
             }
         )
 
+    @staticmethod
+    def parse_group_results(data: Any, relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Match explicit identities; response order is not a reliable identifier."""
+        answer = data.get("answer") if isinstance(data, dict) else None
+        if isinstance(answer, str):
+            answer = json.loads(answer)
+        if not isinstance(answer, list):
+            raise ValueError("multi-group answer must be an array of customer_id, emp_user_id, result objects")
+        expected = {(r["customer_id"], r["emp_user_id"]) for r in relations}
+        indexed = {}
+        for item in answer:
+            if not isinstance(item, dict) or "result" not in item:
+                raise ValueError("each group answer must contain customer_id, emp_user_id and result")
+            key = (item["customer_id"], item["emp_user_id"])
+            if key not in expected or key in indexed:
+                raise ValueError("group answer contains an unexpected or duplicate customer/employee pair")
+            indexed[key] = {
+                "customer_id": key[0], "emp_user_id": key[1],
+                "result": {"answer": item["result"]},
+            }
+        if indexed.keys() != expected:
+            raise ValueError("group answer is missing customer/employee pairs")
+        return [indexed[(r["customer_id"], r["emp_user_id"])] for r in relations]
+
     async def finalize(self, ctx: BatchContext) -> dict[str, Any]:
         envelope = self.envelope(ctx)
         return await publish_kehutong_result(
@@ -141,4 +196,20 @@ class KehutongSecretaryBatchDefinition(BatchAgentDefinition):
             request_id=envelope.request_id,
             agent_name=envelope.agent_name,
             agent_config=self.agent_config(ctx),
+        )
+
+    async def _complete_agent_request(
+        self,
+        ctx: BatchContext,
+        *,
+        status: str,
+        result: dict[str, Any] | None,
+        error: str | None,
+    ) -> None:
+        # Preserve pagination metadata even when finalization/delivery fails.
+        delivered = dict(result or {})
+        if "last_id" in ctx.batch.runtime_context:
+            delivered["last_id"] = ctx.batch.runtime_context["last_id"]
+        await super()._complete_agent_request(
+            ctx, status=status, result=delivered, error=error,
         )

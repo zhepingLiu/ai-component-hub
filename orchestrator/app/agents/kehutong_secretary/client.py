@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -18,7 +19,15 @@ class PermanentCustomerApiError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class CustomerPage:
+    customer_ids: list[str]
+    last_id: int
+
+
 class CustomerDataProvider(Protocol):
+    async def list_customer_page(self, request: dict[str, Any]) -> CustomerPage: ...
+
     async def list_customer_ids(self, request: dict[str, Any]) -> list[str]: ...
 
     async def list_employee_ids(self, customer_id: str) -> list[str]: ...
@@ -33,8 +42,11 @@ class HttpCustomerDataProvider:
         self.config = config
 
     async def list_customer_ids(self, request: dict[str, Any]) -> list[str]:
+        return (await self.list_customer_page(request)).customer_ids
+
+    async def list_customer_page(self, request: dict[str, Any]) -> CustomerPage:
         api = self.config.customer_list_api
-        customer_request = CustomerListRequest.model_validate(request).model_dump()
+        customer_request = CustomerListRequest.model_validate(request).model_dump(exclude_none=True)
         path = api.response.customer_ids_path or "data"
         payload = await self._request(
             api,
@@ -47,6 +59,7 @@ class HttpCustomerDataProvider:
                 f"customer id response path '{path}' did not resolve to a list"
             )
         customer_ids: list[str] = []
+        last_id = customer_request["last_id"]
         for index, record in enumerate(customer_records):
             if (
                 not isinstance(record, dict)
@@ -56,8 +69,14 @@ class HttpCustomerDataProvider:
                 raise PermanentCustomerApiError(
                     f"customer response item at index {index} requires string cust_no"
                 )
+            record_id = record.get("id")
+            if type(record_id) is not int or record_id < 0:
+                raise PermanentCustomerApiError(
+                    f"customer response item at index {index} requires non-negative integer id"
+                )
+            last_id = max(last_id, record_id)
             customer_ids.append(record["cust_no"])
-        return customer_ids
+        return CustomerPage(customer_ids=customer_ids, last_id=last_id)
 
     async def list_employee_ids(self, customer_id: str) -> list[str]:
         payload = await self._request(

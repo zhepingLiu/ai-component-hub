@@ -24,6 +24,7 @@ class CustomerListRequest(BaseModel):
 
     last_id: int = Field(default=0, ge=0, strict=True)
     pageSize: int = Field(default=50, ge=1, le=2000)
+    cust_no: str | None = None
 
 
 class KehutongInputs(BaseModel):
@@ -34,6 +35,7 @@ class KehutongInputs(BaseModel):
 class KehutongOptions(BaseModel):
     batch: BatchOptions = Field(default_factory=BatchOptions)
     scheduled_at: datetime | None = None
+    groups_per_request: int = Field(default=1, ge=1, strict=True)
     max_customers: int = Field(default=10000, ge=1, le=100000)
     deduplicate_customer_ids: bool = True
     fail_on_any_task_error: bool = False

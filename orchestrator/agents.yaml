@@ -76,8 +76,10 @@ agents:
   #   agent_customer_id_field: customerId
   #   agent_customer_data_field: aggregateData
   #   agent_batch_request_id_field: batchRequestId
-  #   # result_server_path and result_public_base_url default to ESB_BASE_URL.
-  #   # Result files are stored directly under the configured base path.
+  #   # Upload base defaults to ESB_BASE_URL; download base defaults to ESB_BASE_URL/SSC.
+  #   # Optional overrides (result_public_base_url is the full download prefix):
+  #   # result_server_path: https://fserver.dev.cqrcb.com
+  #   # result_public_base_url: https://fserver.dev.cqrcb.com/SSC
   #   target_agent:
   #     base_url: http://agent-platform:7002
   #     api_key: replace-me

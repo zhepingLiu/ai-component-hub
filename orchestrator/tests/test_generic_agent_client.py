@@ -58,7 +58,7 @@ class GenericAgentClientTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(client_module.httpx, "AsyncClient", FakeAsyncClient):
             result = await client.run(
                 local_file_paths=[],
-                inputs={"question": "hello"},
+                inputs={"aggregateData": '{"msgs":{"rows":[{"content":"hello"}]}}'},
                 options={"stream": False},
             )
 
@@ -73,7 +73,11 @@ class GenericAgentClientTests(unittest.IsolatedAsyncioTestCase):
         run_payload = FakeAsyncClient.calls[1]["json"]
         self.assertEqual(run_payload["app_id"], "app-1")
         self.assertEqual(run_payload["conversation_id"], "conv-1")
-        self.assertEqual(run_payload["inputs"], {"question": "hello"})
+        self.assertEqual(
+            run_payload["parameters"],
+            {"aggregateData": '{"msgs":{"rows":[{"content":"hello"}]}}'},
+        )
+        self.assertNotIn("inputs", run_payload)
         self.assertEqual(run_payload["stream"], False)
         self.assertNotIn("file_ids", run_payload)
 

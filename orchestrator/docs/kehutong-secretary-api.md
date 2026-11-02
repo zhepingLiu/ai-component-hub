@@ -8,7 +8,7 @@
 - 对外地址：`/api/agents/kehutong-secretary`
 - Content-Type：`application/json`
 
-该接口创建一个异步、可持久化的客户批处理任务。系统先查询活跃客户列表，再查询每个客户的好友关系。全部关系查询成功后，按 `(customer_id, emp_user_id)` 创建独立子任务，读取该组合的聊天记录及客户跟进计划，并调用目标 Agent。子任务按客户列表及关系响应的顺序串行执行，前一任务重试期间后续任务等待；前一任务成功或最终失败后继续下一任务。
+该接口创建一个异步、可持久化的客户批处理任务。系统先查询活跃客户列表，再查询每个客户的好友关系。全部关系查询成功后，按客户列表及员工关系顺序，将每 `options.groups_per_request` 个 `(customer_id, emp_user_id)` 组合创建为一个子任务，读取各组合的聊天记录及客户跟进计划，一次调用目标 Agent。同一客户的员工优先填充当前请求，不足时用下一个客户补齐；同一客户可以跨请求拆分，最后不足容量时按实际组数发送。默认值为 `1`，保持原来的单组行为。子任务按客户列表及关系响应的顺序串行执行，前一任务重试期间后续任务等待；前一任务成功或最终失败后继续下一任务。
 
 ### 1.2 请求参数
 
@@ -25,6 +25,7 @@
 | `inputs.customer_data_request.dataDate`       | string(date)            |   否 | 上海时区当天日期   | 业务日期，请求格式为 `YYYY-MM-DD`；调用聊天接口时转换为 `YYYYMMDD`                                                 |
 | `options`                                     | object                  |   否 | `{}`               | 执行选项                                                                                                           |
 | `options.scheduled_at`                        | string(datetime) / null |   否 | `null`             | 定时执行时间，必须包含时区偏移，例如 `2026-09-18T20:00:00+08:00`                                                   |
+| `options.groups_per_request` | integer | 否 | `1` | 单次目标 Agent 请求最多包含的客户—员工组合数，必须为正整数；与批次及调用并发数无关 |
 | `options.max_customers`                       | integer                 |   否 | `10000`            | 单批次最大客户数，取值范围 `1~100000`；查询结果超过该值时批次失败                                                  |
 | `options.deduplicate_customer_ids`            | boolean                 |   否 | `true`             | 是否按首次出现顺序去重客户号                                                                                       |
 | `options.fail_on_any_task_error`              | boolean                 |   否 | `false`            | 为 `true` 时，只要有客户子任务失败，最终 Agent 状态即为 `FAILED`；为 `false` 时允许部分失败并返回结果汇总          |
@@ -58,6 +59,7 @@ curl -X POST '{gateway_base_url}/api/agents/kehutong-secretary' \
       }
     },
     "options": {
+      "groups_per_request": 3,
       "max_customers": 10000,
       "deduplicate_customer_ids": true,
       "fail_on_any_task_error": false,
@@ -159,6 +161,10 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
 }
 ```
 
+GET `/api/agents/kehutong-secretary?request_id=...` 的完成响应在 `data.result.last_id` 中返回下一页游标。该值为本页客户记录的最大整数 `id`（不会小于本次传入的 `last_id`），不是 `cust_no`，也不受客户去重、员工关系数量或任务分组影响。空页沿用本次传入的游标。下一次 POST 时，将其传入 `inputs.customer_list_request.last_id`，并使用新的 `request_id`。
+
+游标在准备阶段成功后持久化，完成通知时写入 GET 结果；准备尚未完成时可能没有此字段。准备完成后，即使汇总或交付失败，终态结果仍保留游标，但客户端应先处理失败任务再决定是否翻页。客户列表记录缺少有效整数 `id` 时会报错，避免返回错误游标。历史批次未保存游标时不会补造该字段。
+
 ### 2.5 完成响应示例
 
 ```json
@@ -175,7 +181,8 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
         "failed": 0,
         "cancelled": 0
       },
-      "result_url": "http://file-server/results/kht-20260918-001-result.json",
+      "result_url": "http://file-server/results/SSC/kht-20260918-001-result.json",
+      "last_id": 1000000059,
       "server_file": "kht-20260918-001-result.json",
       "size_bytes": 1024,
       "sha256": "<sha256>",
@@ -349,6 +356,44 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
 | `aggregateData`  | string(JSON) | 上述聚合对象序列化后的 JSON 字符串；由 `agent_customer_data_field` 配置字段名   |
 | `batchRequestId` | string       | 格式为 `{batch_id}:{business_key}`，其中 business_key 为客户和员工 ID 的 JSON 数组字符串；由 `agent_batch_request_id_field` 配置字段名 |
 
+### 5.1 多组请求与返回格式
+
+当 `options.groups_per_request > 1` 时，`aggregateData` 为下面数组序列化后的 JSON 字符串。每项包含客户和员工标识，以及原有聚合对象。即使最后一次只有一组，也保持数组格式；不再发送顶层 `customerId`。`aggregateData` 和 `batchRequestId` 仍支持原有字段名配置。
+
+```json
+[
+  {
+    "customer_id": "customer-A",
+    "emp_user_id": "employee-1",
+    "aggregate_data": {"follow_plan": [], "msgs": {"rows": [], "totalNum": 0}}
+  },
+  {
+    "customer_id": "customer-B",
+    "emp_user_id": "employee-2",
+    "aggregate_data": {"follow_plan": [], "msgs": {"rows": [], "totalNum": 0}}
+  }
+]
+```
+
+目标 Agent 返回数据中的 `answer` 必须为以下数组或该数组的 JSON 字符串：
+
+```json
+{
+  "answer": [
+    {"customer_id": "customer-A", "emp_user_id": "employee-1", "result": "分析结果 A"},
+    {"customer_id": "customer-B", "emp_user_id": "employee-2", "result": "分析结果 B"}
+  ]
+}
+```
+
+`result` 可以为任意 JSON 值。系统按 `(customer_id, emp_user_id)` 匹配，允许返回顺序不同；缺失、重复或不属于当前请求的组合，以及无效 JSON，都会导致该请求失败并按配置重试。启用多组模式前，目标 Agent 需要支持此输入和输出格式。
+
+多组请求的 `business_key` 是组合数组，例如 `[["customer-A","employee-1"],["customer-B","employee-2"]]`。`batchRequestId` 仍为 `{batch_id}:{business_key}`，重试保持不变。
+
+每个请求是一个持久化子任务，也是超时、重试、取消和失败处理的单位。任一组合的数据读取失败时，该次请求不会调用目标 Agent；重试会重新读取整个请求的数据。请求之间仍串行执行，组内的并行分析由目标 Agent 完成。系统仅使用本次客户列表查询页中的客户补齐，不自动请求下一页。
+
+批次接口和最终 `summary` 中的计数均为请求任务数；结果文件的 `customers` 则按组合展开，保留每组自己的结果。一个请求最终失败或取消时，其所有组合共享该任务状态、尝试次数和错误信息。
+
 ## 6. 完成回调(当前未配置)
 
 配置 `callback_url` 后，整个批次结束时系统会以 `POST` 方式发送回调。未配置或配置为空字符串时不发送。
@@ -368,7 +413,7 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
       "failed": 0,
       "cancelled": 0
     },
-    "result_url": "http://file-server/results/kht-20260918-001-result.json",
+    "result_url": "http://file-server/results/SSC/kht-20260918-001-result.json",
     "server_file": "kht-20260918-001-result.json",
     "size_bytes": 1024,
     "sha256": "<sha256>"
@@ -388,7 +433,7 @@ curl -G '{gateway_base_url}/api/agents/kehutong-secretary' \
 
 ## 7. 结果文件格式
 
-最终明细文件为 JSON，文件名格式为 `{request_id}-result.json`。不安全的文件名字符会被替换为下划线。文件直接保存到配置的基础路径下，不再添加子目录；旧配置项 `result_subdir` 不再生效。
+最终明细文件为 JSON，文件名格式为 `{request_id}-result.json`。不安全的文件名字符会被替换为下划线。上传地址仍使用 `result_server_path`（默认 `ESB_BASE_URL`），上传文件名不添加子目录。返回的下载地址 `result_url` 默认使用 `ESB_BASE_URL/SSC/{文件名}`；可通过 `result_public_base_url` 指定完整下载前缀（包含所需的 `/SSC`），显式配置时不会额外追加 `/SSC`。旧配置项 `result_subdir` 不再生效。
 
 ```json
 {

@@ -25,7 +25,9 @@ async def publish_kehutong_result(
 ) -> dict[str, Any]:
     esb_base_url = str(ctx.settings.ESB_BASE_URL or "").strip()
     server_path = str(agent_config.get("result_server_path") or esb_base_url).strip()
-    public_base_url = str(agent_config.get("result_public_base_url") or esb_base_url).strip()
+    # The file server exposes downloads under /SSC; uploads use the base URL.
+    default_public_base_url = f"{esb_base_url.rstrip('/')}/SSC" if esb_base_url else ""
+    public_base_url = str(agent_config.get("result_public_base_url") or default_public_base_url).strip()
     if not server_path:
         raise RuntimeError("result_server_path is not configured")
     if not public_base_url:
@@ -49,19 +51,27 @@ async def publish_kehutong_result(
 
     customers = []
     for task in tasks:
-        item = {
-            "customer_id": task.payload["customer_id"],
-            "emp_user_id": task.payload.get("emp_user_id"),
-            "status": str(task.status),
-            "attempts": task.attempt,
+        relations = task.payload.get("groups") or [task.payload]
+        outputs = {
+            (item["customer_id"], item["emp_user_id"]): item
+            for item in (task.output or {}).get("groups", [])
         }
-        if task.output is not None:
-            agent_result = task.output.get("result")
+        for relation in relations:
+            item = {
+                "customer_id": relation["customer_id"],
+                "emp_user_id": relation.get("emp_user_id"),
+                "status": str(task.status),
+                "attempts": task.attempt,
+            }
+            output = outputs.get(
+                (item["customer_id"], item["emp_user_id"]), {}
+            ) if "groups" in task.payload else (task.output or {})
+            agent_result = output.get("result")
             if isinstance(agent_result, dict) and "answer" in agent_result:
                 item["result"] = agent_result["answer"]
-        if task.error:
-            item["error"] = task.error
-        customers.append(item)
+            if task.error:
+                item["error"] = task.error
+            customers.append(item)
 
     summary = {
         "total": ctx.batch.total,
@@ -95,6 +105,8 @@ async def publish_kehutong_result(
     )
     encoded = content.encode("utf-8")
     return {
+        **({"last_id": ctx.batch.runtime_context["last_id"]}
+           if "last_id" in ctx.batch.runtime_context else {}),
         "summary": summary,
         "result_url": f"{public_base_url.rstrip('/')}/{server_file}",
         "server_file": server_file,

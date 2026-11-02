@@ -162,7 +162,7 @@ class GenericAgentClient:
                 if file_ids:
                     run_payload["file_ids"] = file_ids
                 if inputs:
-                    run_payload["inputs"] = inputs
+                    run_payload["parameters"] = inputs
                 if options:
                     run_payload.update(options)
 
