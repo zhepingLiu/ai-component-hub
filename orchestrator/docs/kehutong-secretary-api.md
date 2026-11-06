@@ -334,11 +334,13 @@ GET `/api/agents/kehutong-secretary?request_id=...` 的完成响应在 `data.res
 
 ## 5 传给目标 Agent 的数据
 
-客户聊天记录和跟进计划会聚合为：
+客户聊天记录、跟进计划、客户动态和上一份总结会聚合为：
 
 ```json
 {
   "follow_plan": [],
+  "customer_dynamic": [],
+  "customer_briefing": "",
   "msgs": {
     "rows": [],
     "totalNum": 0,
@@ -347,6 +349,15 @@ GET `/api/agents/kehutong-secretary?request_id=...` 的完成响应在 `data.res
   }
 }
 ```
+
+新增两个必填的 `customer_provider` 配置项（UAT 示例见 `agents.yaml`）：
+
+- `customer_dynamic_api`：POST `/api/kht/sjfw_mysql/queryCustomerDynamic`，请求参数 `external_user_id` 使用当前客户 ID，与跟进计划的 `target_id` 一致。响应 `data` 数组原样放入 `customer_dynamic`。
+- `customer_briefing_api`：POST `/api/kht/sjfw_mysql/queryCustomerBriefing`，请求参数 `customer_id`、`emp_user_id` 沿用当前任务组合。接口负责返回最新一份总结的全部分段，只请求一次，不分页。将 `segment_no` 按数字升序排列，无分隔符拼接 `content`，放入字符串字段 `customer_briefing`。空数组对应空字符串。
+
+两个接口沿用 `channelSystem=AB` 和每次请求生成的 `traceId`，要求响应 `stateCode=0000`。历史总结会校验总段数一致、序号从 1 连续到总段数、无重复段且属于同一文件；数据不完整或格式错误时任务失败，不发送残缺历史给 AI。业务响应失败进入现有重试流程。
+
+部署时需在现有配置中补齐这两个接口地址。多组请求中，每组的 `aggregate_data` 都包含上述新增字段。
 
 默认传给目标 Agent 的字段如下；字段名可在 `agents.yaml` 中修改：
 
@@ -365,12 +376,12 @@ GET `/api/agents/kehutong-secretary?request_id=...` 的完成响应在 `data.res
   {
     "customer_id": "customer-A",
     "emp_user_id": "employee-1",
-    "aggregate_data": {"follow_plan": [], "msgs": {"rows": [], "totalNum": 0}}
+    "aggregate_data": {"follow_plan": [], "msgs": {"rows": [], "totalNum": 0}, "customer_dynamic": [], "customer_briefing": ""}
   },
   {
     "customer_id": "customer-B",
     "emp_user_id": "employee-2",
-    "aggregate_data": {"follow_plan": [], "msgs": {"rows": [], "totalNum": 0}}
+    "aggregate_data": {"follow_plan": [], "msgs": {"rows": [], "totalNum": 0}, "customer_dynamic": [], "customer_briefing": ""}
   }
 ]
 ```

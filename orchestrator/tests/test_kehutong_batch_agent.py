@@ -114,6 +114,8 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         config = CustomerProviderConfig.model_validate(
             {
                 "headers": {"X-Api-Key": "secret"},
+                "customer_dynamic_api": {"url": "http://customer/dynamic"},
+                "customer_briefing_api": {"url": "http://customer/briefing"},
                 "customer_list_api": {
                     "url": "http://customer/list",
                     "method": "POST",
@@ -131,6 +133,15 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         )
         provider = HttpCustomerDataProvider(config)
         FakeAsyncClient.responses = {
+            "http://customer/dynamic": [FakeResponse({
+                "stateCode": "0000", "data": [{"material_title_nm": "动态"}],
+            })],
+            "http://customer/briefing": [FakeResponse({
+                "stateCode": "0000", "data": [
+                    {"file_name": "latest", "segment_no": str(i), "total_segments": "12",
+                     "content": f"第{i}段\n"} for i in reversed(range(1, 13))
+                ],
+            })],
             "http://customer/list": [
                 FakeResponse(
                     {
@@ -193,6 +204,8 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             data,
             {
+                "customer_dynamic": [{"material_title_nm": "动态"}],
+                "customer_briefing": "".join(f"第{i}段\n" for i in range(1, 13)),
                 "follow_plan": [
                     {"title": "call customer", "target_type": "customer"}
                 ],
@@ -223,6 +236,12 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(follow_call["json"], {"target_id": "1001"})
+        dynamic_calls = [c for c in FakeAsyncClient.calls if c["url"].endswith("/dynamic")]
+        briefing_calls = [c for c in FakeAsyncClient.calls if c["url"].endswith("/briefing")]
+        self.assertEqual(len(dynamic_calls), 1)
+        self.assertEqual(len(briefing_calls), 1)
+        self.assertEqual(dynamic_calls[0]["json"], {"external_user_id": "1001"})
+        self.assertEqual(briefing_calls[0]["json"], {"customer_id": "1001", "emp_user_id": "manager-1"})
         self.assertEqual(len(chat_calls), 2)
         self.assertEqual(
             chat_calls[0]["json"],
@@ -235,7 +254,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(chat_calls[1]["json"]["pageNum"], 2)
-        for call in (list_call, relation_call, follow_call, *chat_calls):
+        for call in FakeAsyncClient.calls:
             self.assertEqual(call["headers"]["channelSystem"], "AB")
             self.assertTrue(call["headers"]["traceId"])
         self.assertEqual(
@@ -244,10 +263,87 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("limit", list_call["json"])
 
+    async def test_briefing_response_example_and_complete_numeric_segments(self):
+        config = CustomerProviderConfig.model_validate({
+            name: {"url": "http://customer/" + name} for name in (
+                "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
+            )
+        })
+        provider = HttpCustomerDataProvider(config)
+        # The documented example shows only segment 100 of 200: it is not a complete summary.
+        sample = {"data": [{"file_name": "vvv.csv", "segment_no": 100,
+                            "total_segments": 200, "content": "test1"}],
+                  "stateCode": "0000", "message": "服务调用成功"}
+        with patch.object(provider, "_request", AsyncMock(return_value=sample)) as fetch:
+            with self.assertRaisesRegex(PermanentCustomerApiError, "incomplete"):
+                await provider._get_customer_briefing("c", "e")
+            fetch.assert_awaited_once()
+
+        sample["data"] = [
+            {"file_name": "vvv.csv", "segment_no": i, "total_segments": 200,
+             "content": f"第{i}段\n"} for i in reversed(range(1, 201))
+        ]
+        with patch.object(provider, "_request", AsyncMock(return_value=sample)) as fetch:
+            self.assertEqual(await provider._get_customer_briefing("c", "e"),
+                             "".join(f"第{i}段\n" for i in range(1, 201)))
+            fetch.assert_awaited_once()
+
+        dynamic = [{"external_user_id": "c", "data_ddate": 20261022,
+                    "await_time": "0", "material_title_nm": "", "employee_id": "e"},
+                   {"external_user_id": "", "customer_id": "c", "data_ddate": 20261022}]
+        with patch.object(provider, "_request", AsyncMock(return_value={
+            "stateCode": "0000", "data": dynamic,
+        })):
+            self.assertEqual(await provider._get_customer_dynamic("c"), dynamic)
+
+    async def test_new_customer_apis_handle_empty_and_invalid_responses(self):
+        config = CustomerProviderConfig.model_validate({
+            name: {"url": "http://customer/" + name} for name in (
+                "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
+            )
+        })
+        provider = HttpCustomerDataProvider(config)
+        with patch.object(provider, "_request", AsyncMock(return_value={"stateCode": "0000", "data": []})):
+            self.assertEqual(await provider._get_customer_briefing("c", "e"), "")
+            self.assertEqual(await provider._get_customer_dynamic("c"), [])
+
+        segment = {"file_name": "latest", "segment_no": "1", "total_segments": "1", "content": "原文 "}
+        invalid_records = [
+            [{**segment, "total_segments": "2"}],  # missing segment
+            [{**segment, "total_segments": "2"}] * 2,  # duplicate number
+            [{**segment, "segment_no": "0"}],
+            [{**segment, "segment_no": "1.5"}],
+            [{**segment, "segment_no": True}],
+            [{**segment, "content": None}],
+            [None],
+            [{**segment, "total_segments": "2"}, {**segment, "segment_no": "2"}],
+            [{**segment, "total_segments": "2"},
+             {**segment, "total_segments": "2", "segment_no": "2", "file_name": "other"}],
+        ]
+        for records in invalid_records:
+            with self.subTest(records=records), patch.object(
+                provider, "_request", AsyncMock(return_value={"stateCode": "0000", "data": records})
+            ):
+                with self.assertRaises(PermanentCustomerApiError):
+                    await provider._get_customer_briefing("c", "e")
+
+        for method, args in ((provider._get_customer_briefing, ("c", "e")),
+                             (provider._get_customer_dynamic, ("c",))):
+            for payload, error in (({"stateCode": "9999", "data": []}, RetryableCustomerApiError),
+                                   ({"stateCode": "0000", "data": {}}, PermanentCustomerApiError)):
+                with self.subTest(method=method.__name__, payload=payload), patch.object(
+                    provider, "_request", AsyncMock(return_value=payload)
+                ):
+                    with self.assertRaises(error):
+                        await method(*args)
+
     async def test_customer_list_fetches_only_requested_page_and_preserves_customer_strings(self):
         config = CustomerProviderConfig.model_validate({
             name: {"url": "http://customer/" + name} for name in (
                 "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
             )
         })
         provider = HttpCustomerDataProvider(config)
@@ -268,6 +364,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         config = CustomerProviderConfig.model_validate({
             name: {"url": "http://customer/" + name} for name in (
                 "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
             )
         })
         provider = HttpCustomerDataProvider(config)
@@ -281,6 +378,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         config = CustomerProviderConfig.model_validate({
             name: {"url": "http://customer/" + name} for name in (
                 "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
             )
         })
         provider = HttpCustomerDataProvider(config)
@@ -298,6 +396,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         config = CustomerProviderConfig.model_validate({
             name: {"url": "http://customer/" + name} for name in (
                 "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
             )
         })
         provider = HttpCustomerDataProvider(config)
@@ -368,6 +467,7 @@ class KehutongBatchAgentTests(unittest.IsolatedAsyncioTestCase):
         config = CustomerProviderConfig.model_validate({
             name: {"url": "http://customer/" + name} for name in (
                 "customer_list_api", "customer_relations_api", "chat_messages_api", "follow_plan_api",
+                "customer_dynamic_api", "customer_briefing_api",
             )
         })
         provider = HttpCustomerDataProvider(config)

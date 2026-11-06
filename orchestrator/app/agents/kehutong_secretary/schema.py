@@ -84,6 +84,8 @@ class CustomerProviderConfig(BaseModel):
     customer_relations_api: HttpApiConfig
     chat_messages_api: HttpApiConfig
     follow_plan_api: HttpApiConfig
+    customer_dynamic_api: HttpApiConfig
+    customer_briefing_api: HttpApiConfig
 
 
 class KehutongBatchPayload(BaseModel):

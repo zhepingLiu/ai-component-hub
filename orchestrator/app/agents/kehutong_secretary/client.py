@@ -110,11 +110,65 @@ class HttpCustomerDataProvider:
         request: dict[str, Any],
     ) -> dict[str, Any]:
         data_dt = self._format_data_date(request.get("dataDate"))
-        follow_plan, messages = await asyncio.gather(
+        follow_plan, messages, dynamic, briefing = await asyncio.gather(
             self._get_follow_plan(customer_id),
             self._get_all_chat_messages(customer_id, emp_user_id, data_dt),
+            self._get_customer_dynamic(customer_id),
+            self._get_customer_briefing(customer_id, emp_user_id),
         )
-        return {"follow_plan": follow_plan, "msgs": messages}
+        return {
+            "follow_plan": follow_plan, "msgs": messages,
+            "customer_dynamic": dynamic, "customer_briefing": briefing,
+        }
+
+    async def _get_customer_dynamic(self, customer_id: str) -> list[Any]:
+        return await self._get_customer_records(
+            self.config.customer_dynamic_api, {"external_user_id": customer_id}
+        )
+
+    async def _get_customer_records(
+        self, api: HttpApiConfig, request: dict[str, Any]
+    ) -> list[Any]:
+        payload = await self._request(
+            api, request, extra_headers=self._customer_api_headers()
+        )
+        if not isinstance(payload, dict) or payload.get("stateCode") != "0000":
+            raise RetryableCustomerApiError(
+                f"customer API {api.url} did not return stateCode '0000'"
+            )
+        records = self._extract(payload, "data")
+        if not isinstance(records, list):
+            raise PermanentCustomerApiError(f"customer API {api.url} response 'data' is not a list")
+        return records
+
+    async def _get_customer_briefing(self, customer_id: str, emp_user_id: str) -> str:
+        records = await self._get_customer_records(
+            self.config.customer_briefing_api,
+            {"customer_id": customer_id, "emp_user_id": emp_user_id},
+        )
+        if not records:
+            return ""
+        segments: dict[int, str] = {}
+        file_name = records[0].get("file_name") if isinstance(records[0], dict) else None
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("content"), str):
+                raise PermanentCustomerApiError("briefing segment requires string content")
+            if record.get("file_name") != file_name:
+                raise PermanentCustomerApiError("briefing response contains multiple files")
+            numbers = []
+            for key in ("segment_no", "total_segments"):
+                value = record.get(key)
+                if not (
+                    type(value) is int
+                    or (isinstance(value, str) and value.isascii() and value.isdigit())
+                ):
+                    raise PermanentCustomerApiError(f"briefing {key} must be a positive integer")
+                numbers.append(int(value))
+            segment_no, total = numbers
+            if total != len(records) or not 1 <= segment_no <= total or segment_no in segments:
+                raise PermanentCustomerApiError("briefing segments are incomplete, duplicated or inconsistent")
+            segments[segment_no] = record["content"]
+        return "".join(segments[number] for number in sorted(segments))
 
     async def _get_follow_plan(self, customer_id: str) -> list[Any]:
         payload = await self._request(

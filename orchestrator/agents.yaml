@@ -73,6 +73,12 @@ agents:
   #     follow_plan_api:
   #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryFollowRecords
   #       method: POST
+  #     customer_dynamic_api:
+  #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryCustomerDynamic
+  #       method: POST
+  #     customer_briefing_api:
+  #       url: http://10.197.129.35:6603/api/kht/sjfw_mysql/queryCustomerBriefing
+  #       method: POST
   #   agent_customer_id_field: customerId
   #   agent_customer_data_field: aggregateData
   #   agent_batch_request_id_field: batchRequestId
